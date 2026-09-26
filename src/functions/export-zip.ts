@@ -1,7 +1,8 @@
 import JSZip from "jszip";
-import { InstalledItem, CustomFileItem, PackSettings } from "@/types";
+import { InstalledItem, CustomFileItem, PackSettings, ModVersion } from "@/types";
 import { generateModpkgExport, generateModpkgProjectExport, getSafePackageId } from "./export-package";
 import { getCurseforgeProxyUrl } from "@/lib/api/curseforge";
+import { getModVersions } from "@/lib/api/mods";
 
 export interface ZipExportProgress {
   percentage: number;
@@ -21,6 +22,7 @@ export interface FailedItemReport {
 export interface ExportZipOptions {
   includeVersionIndex: boolean;
   includeProjectFile: boolean;
+  verifiedItemIds?: string[];
   onProgress?: (progress: ZipExportProgress) => void;
 }
 
@@ -28,18 +30,10 @@ export interface ExportZipResult {
   success: boolean;
   totalProcessed: number;
   failedItems: FailedItemReport[];
+  successfulItemIds: string[];
+  compatibleItemIds: string[];
   fileName: string;
 }
-
-const CF_LOADER_MAP: Record<string, number> = {
-  any: 0,
-  forge: 1,
-  cauldron: 2,
-  liteloader: 3,
-  fabric: 4,
-  quilt: 5,
-  neoforge: 6,
-};
 
 function getFolderForType(type: string): string {
   const t = (type || "").toLowerCase();
@@ -50,147 +44,91 @@ function getFolderForType(type: string): string {
   return "mods";
 }
 
-async function resolveModrinthFile(
+async function resolveItemFile(
   item: InstalledItem,
   mcVersion: string,
   loader: string
 ): Promise<{ url: string; fileName: string }> {
-  const versionId = item.versionId;
-  const isSpecificVersion = versionId && versionId !== "latest" && versionId !== "latest-unstable" && versionId !== "custom";
-
-  if (isSpecificVersion) {
-    const res = await fetch(`https://api.modrinth.com/v2/version/${versionId}`);
-    if (!res.ok) throw new Error(`HTTP error ${res.status} fetching Modrinth version ${versionId}`);
-    const data = await res.json();
-    const file = data.files?.find((f: any) => f.primary) || data.files?.[0];
-    if (!file?.url) throw new Error("No download URL found in Modrinth version");
-    return { url: file.url, fileName: file.filename || `${item.name}.jar` };
+  // 1. Custom / local override content
+  if (item.provider === "custom" || item.provider === "local_override") {
+    const downloadUrl = item.downloadUrl;
+    if (!downloadUrl) throw new Error("No hay URL de descarga para este contenido personalizado");
+    const ext = item.contentType === "resourcepack" ? "zip" : "jar";
+    const fileName = downloadUrl.split("/").pop()?.split("?")[0] || `${item.name}.${ext}`;
+    return { url: downloadUrl, fileName };
   }
 
-  // Fetch project versions
-  const res = await fetch(`https://api.modrinth.com/v2/project/${item.id}/version`);
-  if (!res.ok) throw new Error(`HTTP error ${res.status} fetching project versions for ${item.name}`);
-  const versions: any[] = await res.json();
+  // 2. Modrinth / CurseForge / all providers: query getModVersions for full parity with UI
+  const rawProvider = item.provider || "modrinth";
+  let versions = await getModVersions(
+    rawProvider === "all" ? "modrinth" : rawProvider,
+    item.id,
+    mcVersion,
+    loader,
+    item.contentType
+  );
 
-  const isShader = item.contentType === "shader" || item.contentType === "shaders";
-  const isResourcePack = item.contentType === "resourcepack" || item.contentType === "textures" || item.contentType === "resourcepacks";
-  const isDatapack = item.contentType === "datapack" || item.contentType === "datapacks";
-  const isWorld = item.contentType === "world" || item.contentType === "worlds" || item.contentType === "save" || item.contentType === "saves";
-  const loaderCheckNeeded = !isShader && !isResourcePack && !isDatapack && !isWorld;
+  // Fallback for "all" provider: if not found on Modrinth, check CurseForge
+  if (versions.length === 0 && rawProvider === "all") {
+    versions = await getModVersions("curseforge", item.id, mcVersion, loader, item.contentType);
+  }
 
-  // Filter versions by loader & MC version
-  const compatible = versions.filter((v: any) => {
-    const matchLoader = !loaderCheckNeeded || !loader || loader === "Any" || v.loaders?.some((l: string) => l.toLowerCase() === loader.toLowerCase());
-    const matchMC = !mcVersion || mcVersion === "Any" || isShader || v.game_versions?.includes(mcVersion);
-    return matchLoader && matchMC;
-  });
+  if (versions.length === 0) {
+    throw new Error(`No hay versiones compatibles para Minecraft ${mcVersion || "Any"} (${loader})`);
+  }
 
-  const candidates = compatible.length > 0 ? compatible : versions;
+  const versionId = (item.versionId || "latest").trim();
+  let targetVer: ModVersion | undefined;
 
-  let targetVersion: any;
   if (versionId === "latest-unstable") {
-    // Pick the latest even if beta/alpha
-    targetVersion = candidates[0];
+    targetVer = versions[0];
+  } else if (versionId === "latest") {
+    // Buscar primero versión estable; si no existe, usar la última disponible (unstable)
+    targetVer = versions.find((v) => v.stable) || versions[0];
   } else {
-    // "latest" -> Pick first stable release, otherwise first available
-    targetVersion = candidates.find((v: any) => v.version_type === "release") || candidates[0];
+    // Versión fija
+    targetVer =
+      versions.find((v) => v.id === versionId) ||
+      versions.find((v) => v.name === item.versionName) ||
+      (item.fileName ? versions.find((v) => v.fileName === item.fileName) : undefined) ||
+      versions[0];
   }
 
-  if (!targetVersion) throw new Error(`No compatible version found for ${item.name}`);
+  if (!targetVer) {
+    throw new Error(`No se pudo determinar la versión para ${item.name}`);
+  }
 
-  const file = targetVersion.files?.find((f: any) => f.primary) || targetVersion.files?.[0];
-  if (!file?.url) throw new Error(`No file found in target version for ${item.name}`);
+  let downloadUrl = targetVer.downloadUrl;
+  let fileName = targetVer.fileName;
 
-  const defaultExt = isResourcePack || isWorld ? "zip" : "jar";
-  return { url: file.url, fileName: file.filename || `${item.name}.${defaultExt}` };
-}
-
-async function resolveCurseForgeFile(
-  item: InstalledItem,
-  mcVersion: string,
-  loader: string
-): Promise<{ url: string; fileName: string }> {
-  const versionId = item.versionId;
-  const isSpecificFile = versionId && versionId !== "latest" && versionId !== "latest-unstable" && versionId !== "custom";
-  const isShader = item.contentType === "shader" || item.contentType === "shaders";
-  const isResourcePack = item.contentType === "resourcepack" || item.contentType === "textures" || item.contentType === "resourcepacks";
-  const isDatapack = item.contentType === "datapack" || item.contentType === "datapacks";
-  const isWorld = item.contentType === "world" || item.contentType === "worlds" || item.contentType === "save" || item.contentType === "saves";
-  const defaultExt = isResourcePack || isWorld ? "zip" : "jar";
-
-  const getFileDownloadUrl = async (fileId: string | number, currentDownloadUrl?: string): Promise<string | undefined> => {
-    if (currentDownloadUrl) return currentDownloadUrl;
+  // Si es CurseForge y la URL de descarga directa no vino en la lista, consultar endpoint de descarga
+  if (!downloadUrl && (rawProvider === "curseforge" || item.provider === "curseforge")) {
     try {
-      const res = await fetch(getCurseforgeProxyUrl(`/v1/mods/${item.id}/files/${fileId}/download-url`));
+      const res = await fetch(getCurseforgeProxyUrl(`/v1/mods/${item.id}/files/${targetVer.id}/download-url`));
       if (res.ok) {
         const json = await res.json();
-        if (json?.data) return json.data;
+        if (json?.data) {
+          downloadUrl = json.data;
+        }
       }
     } catch {
       // ignore and fallback
     }
-    return undefined;
-  };
-
-  if (isSpecificFile) {
-    const res = await fetch(getCurseforgeProxyUrl(`/v1/mods/${item.id}/files/${versionId}`));
-    if (!res.ok) throw new Error(`CurseForge API error ${res.status}`);
-    const json = await res.json();
-    const data = json.data;
-    const downloadUrl = await getFileDownloadUrl(versionId, data?.downloadUrl);
-    if (!downloadUrl) {
-      throw new Error(`Curseforge file ${versionId} does not permit direct download (author restricted)`);
-    }
-    return { url: downloadUrl, fileName: data.fileName || `${item.name}.${defaultExt}` };
   }
 
-  // Fetch files list
-  const url = new URL(getCurseforgeProxyUrl(`/v1/mods/${item.id}/files`), window.location.origin);
-
-  // Worlds, Shaders, Resource Packs, and Datapacks do NOT have mod loaders on CurseForge
-  if (!isShader && !isResourcePack && !isDatapack && !isWorld && loader && loader !== "Any") {
-    const modLoaderType = CF_LOADER_MAP[loader.toLowerCase()];
-    if (modLoaderType !== undefined) {
-      url.searchParams.set("modLoaderType", modLoaderType.toString());
-    }
-  }
-  if (mcVersion && mcVersion !== "Any" && !isShader) {
-    url.searchParams.set("gameVersion", mcVersion);
+  if (!downloadUrl && item.downloadUrl) {
+    downloadUrl = item.downloadUrl;
   }
 
-  let res = await fetch(url.toString());
-  let files: any[] = [];
-  if (res.ok) {
-    const json = await res.json();
-    files = json.data || [];
-  }
-
-  // Fallback: If 0 files found with strict version/loader, query without gameVersion or loader
-  if (files.length === 0) {
-    const fallbackUrl = new URL(getCurseforgeProxyUrl(`/v1/mods/${item.id}/files`), window.location.origin);
-    const fallbackRes = await fetch(fallbackUrl.toString());
-    if (fallbackRes.ok) {
-      const json = await fallbackRes.json();
-      files = json.data || [];
-    }
-  }
-
-  let targetFile: any;
-  if (versionId === "latest-unstable") {
-    targetFile = files[0];
-  } else {
-    // releaseType === 1 is Release
-    targetFile = files.find((f: any) => f.releaseType === 1) || files[0];
-  }
-
-  if (!targetFile) throw new Error(`No compatible file found on CurseForge for ${item.name}`);
-
-  const downloadUrl = await getFileDownloadUrl(targetFile.id, targetFile.downloadUrl);
   if (!downloadUrl) {
-    throw new Error(`CurseForge mod ${item.name} does not allow third-party API download`);
+    throw new Error(`El archivo de ${item.name} (${targetVer.name}) no permite descarga directa por restricciones del autor`);
   }
 
-  return { url: downloadUrl, fileName: targetFile.fileName || `${item.name}.${defaultExt}` };
+  const defaultExt = item.contentType === "resourcepack" || item.contentType === "world" ? "zip" : "jar";
+  return {
+    url: downloadUrl,
+    fileName: fileName || `${item.name}.${defaultExt}`,
+  };
 }
 
 export async function exportModpkgZip(
@@ -201,6 +139,8 @@ export async function exportModpkgZip(
 ): Promise<ExportZipResult> {
   const zip = new JSZip();
   const failedItems: FailedItemReport[] = [];
+  const successfulItemIds: string[] = [];
+  const compatibleItemIds: string[] = [];
   const safeId = getSafePackageId(packSettings);
 
   const totalContent = (installedContent || []).length;
@@ -221,29 +161,25 @@ export async function exportModpkgZip(
 
   // 1. Process and download installed content
   for (const item of installedContent || []) {
-    updateProgress(`Downloading ${item.name}...`);
+    // Si ya se verificó previamente y este elemento no estaba verificado, saltar
+    if (options.verifiedItemIds && options.verifiedItemIds.length > 0 && !options.verifiedItemIds.includes(item.id)) {
+      failedItems.push({
+        id: item.id,
+        name: item.name,
+        provider: item.provider,
+        reason: `No verificado / incompatible con Minecraft ${packSettings.mcVersion} (${packSettings.loader})`,
+        url: item.downloadUrl,
+      });
+      continue;
+    }
+
+    updateProgress(`Descargando ${item.name}...`);
     try {
-      let downloadUrl = item.downloadUrl;
-      let finalFileName = item.name;
+      const resolved = await resolveItemFile(item, packSettings.mcVersion, packSettings.loader);
+      compatibleItemIds.push(item.id);
 
-      if (item.provider === "modrinth") {
-        const resolved = await resolveModrinthFile(item, packSettings.mcVersion, packSettings.loader);
-        downloadUrl = resolved.url;
-        finalFileName = resolved.fileName;
-      } else if (item.provider === "curseforge") {
-        const resolved = await resolveCurseForgeFile(item, packSettings.mcVersion, packSettings.loader);
-        downloadUrl = resolved.url;
-        finalFileName = resolved.fileName;
-      } else if (item.provider === "custom" || item.provider === "local_override") {
-        if (!downloadUrl) throw new Error("No download URL provided for custom content");
-        const ext = item.contentType === "resourcepack" ? "zip" : "jar";
-        finalFileName = downloadUrl.split("/").pop()?.split("?")[0] || `${item.name}.${ext}`;
-      }
-
-      if (!downloadUrl) {
-        throw new Error(`No valid download URL could be determined`);
-      }
-
+      const downloadUrl = resolved.url;
+      const finalFileName = resolved.fileName;
       const folder = getFolderForType(item.contentType);
       const targetFilePath = item.targetPath
         ? (item.targetPath.startsWith("/") ? item.targetPath.slice(1) : item.targetPath)
@@ -260,24 +196,23 @@ export async function exportModpkgZip(
       try {
         fileRes = await fetch(fetchUrl);
         if (!fileRes.ok && fetchUrl !== downloadUrl) {
-          // Fallback to allorigins if dev proxy fails
           fileRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(downloadUrl)}`);
         }
       } catch (fetchErr) {
-        // Fallback CORS proxy
         fileRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(downloadUrl)}`);
       }
 
-      if (!fileRes.ok) throw new Error(`HTTP error ${fileRes.status} downloading file`);
+      if (!fileRes.ok) throw new Error(`HTTP error ${fileRes.status} al descargar archivo`);
       const blob = await fileRes.blob();
       zip.file(targetFilePath, blob);
+      successfulItemIds.push(item.id);
     } catch (err: any) {
       console.warn(`Failed to package item ${item.name}:`, err);
       failedItems.push({
         id: item.id,
         name: item.name,
         provider: item.provider,
-        reason: err.message || "Unknown download error",
+        reason: err.message || "Error al descargar",
         url: item.downloadUrl,
       });
     }
@@ -285,7 +220,7 @@ export async function exportModpkgZip(
 
   // 2. Process and package overrides (customFiles)
   for (const file of customFiles || []) {
-    updateProgress(`Packaging custom file ${file.name}...`);
+    updateProgress(`Empaquetando archivo personalizado ${file.name}...`);
     try {
       const cleanPath = file.targetPath?.startsWith("/") ? file.targetPath.slice(1) : (file.targetPath || file.name);
       if (file.sourceUrl) {
@@ -302,9 +237,12 @@ export async function exportModpkgZip(
         } catch {
           res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(file.sourceUrl)}`);
         }
-        if (!res.ok) throw new Error(`HTTP error ${res.status} downloading override`);
+        if (!res.ok) throw new Error(`HTTP error ${res.status} al descargar override`);
         const blob = await res.blob();
         zip.file(cleanPath, blob);
+      } else if (file.isBinary && file.content?.startsWith("data:")) {
+        const base64Data = file.content.split(",")[1];
+        zip.file(cleanPath, base64Data, { base64: true });
       } else {
         zip.file(cleanPath, file.content ?? "");
       }
@@ -314,7 +252,7 @@ export async function exportModpkgZip(
         id: file.id,
         name: file.name,
         provider: "custom_file",
-        reason: err.message || "Failed to include override",
+        reason: err.message || "Fallo al incluir override",
         url: file.sourceUrl,
       });
     }
@@ -322,13 +260,13 @@ export async function exportModpkgZip(
 
   // 3. Optional Inclusions
   if (options.includeVersionIndex) {
-    updateProgress("Generating .mpkg index...");
+    updateProgress("Generando índice .mpkg...");
     const indexData = generateModpkgExport(packSettings, installedContent, customFiles);
     zip.file(`${safeId}.mpkg`, JSON.stringify(indexData, null, 2));
   }
 
   if (options.includeProjectFile) {
-    updateProgress("Generating .mpkg-proj project file...");
+    updateProgress("Generando archivo de proyecto .mpkg-proj...");
     const projectData = generateModpkgProjectExport(packSettings, installedContent, customFiles);
     zip.file(`${safeId}.mpkg-proj`, JSON.stringify(projectData, null, 2));
   }
@@ -336,7 +274,7 @@ export async function exportModpkgZip(
   // 4. Generate final ZIP
   options.onProgress?.({
     percentage: 92,
-    currentStep: "Compressing and finalizing ZIP package...",
+    currentStep: "Comprimiendo y finalizando paquete ZIP...",
     completedItems: totalSteps,
     totalItems: totalSteps,
   });
@@ -345,7 +283,7 @@ export async function exportModpkgZip(
     const pct = 90 + Math.round(metadata.percent * 0.1);
     options.onProgress?.({
       percentage: pct,
-      currentStep: `Compressing ZIP (${Math.round(metadata.percent)}%)...`,
+      currentStep: `Comprimiendo ZIP (${Math.round(metadata.percent)}%)...`,
       completedItems: totalSteps,
       totalItems: totalSteps,
     });
@@ -364,7 +302,7 @@ export async function exportModpkgZip(
 
   options.onProgress?.({
     percentage: 100,
-    currentStep: "Export complete!",
+    currentStep: "¡Exportación completada!",
     completedItems: totalSteps,
     totalItems: totalSteps,
   });
@@ -373,6 +311,8 @@ export async function exportModpkgZip(
     success: true,
     totalProcessed: totalContent + totalOverrides,
     failedItems,
+    successfulItemIds,
+    compatibleItemIds,
     fileName,
   };
 }

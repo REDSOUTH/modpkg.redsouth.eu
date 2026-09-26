@@ -97,8 +97,17 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
   useEffect(() => {
     if (installedItem?.versionId) {
       setSelectedVersionId(installedItem.versionId);
+    } else {
+      setSelectedVersionId("latest");
     }
-  }, [installedItem?.versionId]);
+  }, [installedItem?.versionId, packSettings.id]);
+
+  useEffect(() => {
+    setVersions([]);
+    if (!installedItem) {
+      setSelectedVersionId("latest");
+    }
+  }, [mcVersion, loader, packSettings.id]);
 
   const selectedVersionName = selectedVersionId === "latest"
     ? t("editor.card.latest")
@@ -110,25 +119,53 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
   const globalCustomItems = getCustomContentItems();
   const isFromMyResources = isCustom && mod.id && globalCustomItems.some(i => i.id === mod.id);
 
-  const handleAddAction = (e?: React.MouseEvent) => {
+  const handleAddAction = async (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     
     if (isAdded) {
       if (mod.id) removeContent(mod.id);
     } else {
       if (mod.id) {
+        let versionIdToUse = isCustom ? "custom" : selectedVersionId;
+        let versionName = isCustom ? "Custom URL" : selectedVersionName;
+
+        // Si está en 'latest', verificar si solo tiene versiones unstable para seleccionar por defecto 'latest-unstable'
+        if (versionIdToUse === "latest" && !isCustom) {
+          try {
+            let list = versions;
+            if (list.length === 0) {
+              list = await getModVersions(
+                mod.provider || "modrinth",
+                mod.id,
+                mcVersion,
+                loader,
+                normalizeType(mod.type || "mod")
+              );
+              setVersions(list);
+            }
+            const hasStable = list.some(v => v.stable);
+            if (!hasStable && list.length > 0) {
+              versionIdToUse = "latest-unstable";
+              versionName = t("editor.card.latestUnstable");
+              setSelectedVersionId("latest-unstable");
+            }
+          } catch (err) {
+            console.warn("Could not check versions for auto latest-unstable:", err);
+          }
+        }
+
         addContent({
           id: mod.id,
           name: mod.name,
           provider: isCustom ? "custom" : (normalizeProvider(mod.provider || "modrinth") as CardProviderType),
           iconUrl: mod.iconUrl,
-          versionId: isCustom ? "custom" : selectedVersionId,
-          versionName: isCustom ? "Custom URL" : selectedVersionName,
+          versionId: versionIdToUse,
+          versionName: versionName,
           contentType: normalizeType(mod.type || "mod"),
           downloadUrl: isCustom ? ((mod as any).customItem?.downloadUrl || mod.websiteUrl || mod.description) : undefined,
           author: mod.author,
-          mcVersion: (mod as any).mcVersion,
-          loader: (mod as any).loader,
+          mcVersion: (mod as any).mcVersion || packSettings.mcVersion,
+          loader: (mod as any).loader || packSettings.loader,
           targetPath: (mod as any).targetPath,
           storageLocation: (mod as any).storageLocation,
           isPackageOnly: isCustom ? !isFromMyResources : undefined,
@@ -148,7 +185,9 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
         iconUrl: mod.iconUrl,
         versionId: val,
         versionName: val === "latest" ? "Latest" : val === "latest-unstable" ? "Latest Unstable" : name || versions.find(v => v.id === val)?.name || val,
-        contentType: normalizeType(mod.type || "mod")
+        contentType: normalizeType(mod.type || "mod"),
+        mcVersion: packSettings.mcVersion,
+        loader: packSettings.loader,
       });
     }
   };
@@ -207,13 +246,13 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
       if (versionToUse === "latest-unstable") {
         targetVer = currentVersionsList[0];
       } else if (versionToUse === "latest") {
-        targetVer = currentVersionsList.find(v => v.stable) || currentVersionsList[0];
+        targetVer = currentVersionsList.find(v => v.stable);
       } else {
         targetVer = currentVersionsList.find(v => v.id === versionToUse) || currentVersionsList[0];
       }
 
       if (!targetVer) {
-        notification.error(t("toast.couldNotDetermineVersion"));
+        notification.error(t("toast.noCompatibleFiles", { mcVersion, loader }));
         return;
       }
 
@@ -275,6 +314,26 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
       );
       setVersions(fetched);
       setIsLoadingVersions(false);
+
+      // Si solo hay versiones unstable y estaba en 'latest', pre-seleccionar 'latest-unstable'
+      const hasStable = fetched.some(v => v.stable);
+      if (!hasStable && fetched.length > 0 && selectedVersionId === "latest") {
+        setSelectedVersionId("latest-unstable");
+        if (isAdded) {
+          addContent({
+            ...(installedItem || {}),
+            id: mod.id,
+            name: mod.name,
+            provider: normalizeProvider(mod.provider || "modrinth") as CardProviderType,
+            iconUrl: mod.iconUrl,
+            versionId: "latest-unstable",
+            versionName: t("editor.card.latestUnstable"),
+            contentType: normalizeType(mod.type || "mod"),
+            mcVersion: packSettings.mcVersion,
+            loader: packSettings.loader,
+          });
+        }
+      }
     }
   };
 
@@ -319,7 +378,7 @@ export default function ModCard({ mod, onCategoryClick, onEditCustomItem }: ModC
   return (
     <motion.div 
       onClick={handleAddAction}
-      className="group relative bg-card dark:bg-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 overflow-hidden ring-1 ring-inset ring-border/50 dark:ring-0 outline outline-3 outline-transparent transition-all duration-200 hover:outline-[#FE5000] hover:outline-offset-4 active:scale-95 cursor-pointer h-full shadow-sm dark:shadow-none"
+      className="group relative bg-card dark:bg-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 overflow-hidden ring-1 ring-inset ring-border/50 dark:ring-0 outline outline-3 outline-transparent transition-[outline,outline-offset,box-shadow,background-color] duration-150 hover:outline-[#FE5000] hover:outline-offset-4 active:scale-[0.98] cursor-pointer h-full shadow-sm dark:shadow-none"
     >
 
       <div className="flex items-start justify-between relative z-10 w-full">

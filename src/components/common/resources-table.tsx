@@ -4,7 +4,6 @@ import { CustomContentItem, CustomFileItem, InstalledItem } from "@/types";
 import { ContentTypeBadge, FileTypeBadge, ContentTypeIcon } from "@/components/common/content-type-icon";
 import { StorageBadge } from "@/components/common/storage-badge";
 import { Pencil, Trash2, Plus, Globe, Code2, ChevronDown } from "lucide-react";
-import { motion } from "framer-motion";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { PackageDropdownSelector } from "@/components/common/package-dropdown-selector";
 import { ActionButton } from "@/components/common/action-button";
@@ -95,11 +94,8 @@ export function ResourcesTable({
               const fileItem = !isContentMode ? (item as CustomFileItem) : null;
 
               return (
-                <motion.tr
+                <tr
                   key={item.id}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
                   className="hover:bg-muted/40 transition-colors"
                 >
                   {/* 1. Name Column with Neutral Dark/Grey Icon Box */}
@@ -286,7 +282,7 @@ export function ResourcesTable({
                       />
                     </div>
                   </td>
-                </motion.tr>
+                </tr>
               );
             })}
           </tbody>

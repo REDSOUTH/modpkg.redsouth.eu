@@ -17,7 +17,7 @@ export default function MyResourcesPage() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ActiveTab>("custom-content");
 
-  const [items, setItems] = useState<CustomContentItem[]>([]);
+  const [items, setItems] = useState<CustomContentItem[]>(() => getCustomContentItems());
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStorage, setSelectedStorage] = useState("all");
   const [selectedType, setSelectedType] = useState("all");
@@ -28,7 +28,6 @@ export default function MyResourcesPage() {
 
   useEffect(() => {
     document.title = "MODPKG — My Resources";
-    setItems(getCustomContentItems());
   }, []);
 
   const handleDeleteItem = (id: string) => {
@@ -137,13 +136,13 @@ export default function MyResourcesPage() {
                   </p>
                 </div>
 
-                <AnimatePresence mode="wait">
+                <AnimatePresence initial={false}>
                   {filteredItems.length > 0 ? (
-                    <motion.div key="table" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full pb-6">
+                    <motion.div key="table" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.1 }} className="w-full pb-6">
                       <CustomContentTable items={filteredItems} onDelete={handleDeleteItem} onEdit={handleStartEdit} />
                     </motion.div>
                   ) : (
-                    <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="py-8 flex flex-col items-center justify-center">
+                    <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.1 }} className="py-8 flex flex-col items-center justify-center">
                       <Empty className="w-full max-w-xl mx-auto py-6">
                         <EmptyHeader>
                           <EmptyMedia variant="icon" className="bg-blue-500/10 text-blue-400">

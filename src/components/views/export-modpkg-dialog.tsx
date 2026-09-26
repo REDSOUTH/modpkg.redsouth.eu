@@ -59,7 +59,7 @@ export interface ExportModpkgDialogProps {
 
 export function ExportModpkgDialog({ isOpen, onClose }: ExportModpkgDialogProps) {
   const { t } = useTranslation();
-  const { packSettings, installedContent, customFiles } = usePack();
+  const { packSettings, installedContent, customFiles, verifiedItems, setVerifiedItems } = usePack();
 
   // ZIP options
   const [includeIndexInZip, setIncludeIndexInZip] = useState<string>("yes");
@@ -108,10 +108,16 @@ export function ExportModpkgDialog({ isOpen, onClose }: ExportModpkgDialogProps)
       const result = await exportModpkgZip(packSettings, installedContent, customFiles, {
         includeVersionIndex: includeIndexInZip === "yes",
         includeProjectFile: includeProjectInZip === "yes",
+        verifiedItemIds: verifiedItems,
         onProgress: (progress) => {
           setZipProgress(progress);
         },
       });
+
+      // Synchronize export results back to sidebar verification
+      if (result.compatibleItemIds && result.compatibleItemIds.length > 0) {
+        setVerifiedItems(prev => Array.from(new Set([...prev, ...result.compatibleItemIds])));
+      }
 
       setExportCompleted(true);
       if (result.failedItems.length > 0) {

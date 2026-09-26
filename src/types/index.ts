@@ -37,6 +37,7 @@ export interface PackReleaseData {
   customFiles: CustomFileItem[];
   publishedAt?: string;
   updatedAt?: string;
+  verifiedItems?: string[];
 }
 
 export interface ModpkgExportMetadata {
@@ -156,11 +157,13 @@ export interface CustomFileItem {
   name: string;           // "Mis ajustes de gráficos"
   targetPath: string;     // "/" por defecto (raíz del paquete)
   type: CustomFileType;
-  content?: string;       // texto inline editado con Monaco
+  content?: string;       // texto inline editado con Monaco o base64
   sourceUrl?: string;     // URL externa descargable (alternativa a content)
   storageLocation: CustomStorageLocation;
   createdAt: string;
   updatedAt: string;
+  size?: number;          // tamaño en bytes
+  isBinary?: boolean;     // true si es archivo binario codificado en base64
 }
 export type ConfigFileItem = CustomFileItem;
 
@@ -224,10 +227,17 @@ export interface PackContextType {
   removeContent: (id: string) => void;
   customFiles: CustomFileItem[];
   addCustomFile: (file: CustomFileItem) => void;
+  addCustomFilesBatch: (files: CustomFileItem[]) => void;
   updateCustomFile: (file: CustomFileItem) => void;
   removeCustomFile: (id: string) => void;
+  removeCustomFilesBatch: (ids: string[]) => void;
+  removeCustomFolder: (folderPath: string) => void;
   isCreatePackModalOpen: boolean;
   setIsCreatePackModalOpen: (open: boolean) => void;
+  verifiedItems: string[];
+  setVerifiedItems: (items: string[] | ((prev: string[]) => string[])) => void;
+  isVerifying: boolean;
+  verifyPackContents: () => Promise<{ verifiedCount: number; totalCount: number; failedNames: string[] }>;
 }
 
 // ==========================================
@@ -237,6 +247,7 @@ export interface PackContextType {
 export interface PackSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onCancel?: () => void;
   focusField?: FocusField;
   isCreateMode?: boolean;
   pack?: PackSettings | null;

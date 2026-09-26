@@ -13,7 +13,7 @@ import { FocusField } from "@/types";
 export default function EditorPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isCreatePackModalOpen, setIsCreatePackModalOpen, customFiles, importPack } = usePack();
+  const { isCreatePackModalOpen, setIsCreatePackModalOpen, packagesList, customFiles, importPack } = usePack();
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [focusField, setFocusField] = useState<FocusField>(null);
   const [contentType, setContentType] = useState<string>("mods");
@@ -48,6 +48,13 @@ export default function EditorPage() {
     document.title = "MODPKG — Editor";
   }, []);
 
+  // When no packages exist, ensure create modal is open on top of editor
+  useEffect(() => {
+    if (packagesList.length === 0) {
+      setIsCreatePackModalOpen(true);
+    }
+  }, [packagesList.length, setIsCreatePackModalOpen]);
+
   // Handle package imported from JSON file if passed via navigation state (fallback)
   const hasImportedRef = useRef<boolean>(false);
   useEffect(() => {
@@ -62,6 +69,32 @@ export default function EditorPage() {
       navigate("/editor", { replace: true, state: {} });
     }
   }, [location.state, importPack, navigate]);
+
+  const handleDockItemClick = (item: any) => {
+    if (!item?.id) return;
+    setActiveView("browse");
+    setSearchQuery(item.id);
+    const typeMap: Record<string, string> = {
+      mod: "mods",
+      mods: "mods",
+      resourcepack: "textures",
+      resourcepacks: "textures",
+      texturepack: "textures",
+      textures: "textures",
+      shader: "shaders",
+      shaders: "shaders",
+      datapack: "datapacks",
+      datapacks: "datapacks",
+      world: "worlds",
+      worlds: "worlds",
+    };
+    if (item.contentType && typeMap[item.contentType]) {
+      setContentType(typeMap[item.contentType]);
+    }
+    if (item.provider && provider !== "all" && provider !== item.provider) {
+      setProvider(item.provider);
+    }
+  };
 
   const isModalOpen = isSettingsOpen || isCreatePackModalOpen;
   const activeCreateMode = isSettingsCreateMode || isCreatePackModalOpen;
@@ -112,7 +145,7 @@ export default function EditorPage() {
             />
           )}
 
-          <SelectedDock />
+          <SelectedDock onItemClick={handleDockItemClick} />
         </div>
 
         <PackSettingsModal 
@@ -123,6 +156,15 @@ export default function EditorPage() {
             setIsCreatePackModalOpen(false);
             setIsSettingsCreateMode(false);
             setFocusField(null); 
+          }} 
+          onCancel={() => {
+            setIsSettingsOpen(false); 
+            setIsCreatePackModalOpen(false);
+            setIsSettingsCreateMode(false);
+            setFocusField(null); 
+            if (packagesList.length === 0) {
+              navigate("/");
+            }
           }} 
           focusField={focusField}
         />

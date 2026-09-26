@@ -4,7 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { FileSliders, Pencil, Upload, Globe, Code2, Check, Trash2, X } from "lucide-react";
+import { FileSliders, Pencil, Upload, Globe, Code2, Check, Trash2, X, FileArchive } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import Editor from "@monaco-editor/react";
@@ -19,6 +19,8 @@ import {
   CUSTOM_FILE_TYPES,
   detectFileType,
   detectMonacoLanguage,
+  isUnsupportedBinary,
+  formatFileSize,
 } from "@/lib/storage/config-files-storage";
 import { CustomFileItem, CustomFileType, CustomStorageLocation } from "@/types";
 import { cn } from "@/lib/utils";
@@ -88,6 +90,7 @@ export function AddConfigFileDialog({
 
   const monacoLang = detectMonacoLanguage(targetPath);
   const mediaType = getUrlMediaType(sourceUrl, type);
+  const isBinaryItem = isUnsupportedBinary(editItem);
 
   // Reset form on open
   useEffect(() => {
@@ -98,7 +101,7 @@ export function AddConfigFileDialog({
       setName(editItem.name);
       setTargetPath(editItem.targetPath);
       setType(editItem.type);
-      setContent(editItem.content ?? "");
+      setContent(isBinaryItem ? "" : (editItem.content ?? ""));
       setSourceUrl(editItem.sourceUrl ?? "");
       setSaveToCloud(editItem.storageLocation === "account_cloud");
       setContentMode(editItem.sourceUrl ? "url" : "edit");
@@ -213,7 +216,7 @@ export function AddConfigFileDialog({
   };
 
   const isValid = !!name.trim() && !!targetPath.trim() &&
-    (contentMode === "edit" ? !!content.trim() : contentMode === "url" ? !!sourceUrl.trim() : !!content.trim());
+    (isBinaryItem || (contentMode === "edit" ? !!content.trim() : contentMode === "url" ? !!sourceUrl.trim() : !!content.trim()));
 
   const handleSave = () => {
     if (!isValid) return;
@@ -223,9 +226,11 @@ export function AddConfigFileDialog({
       name: name.trim(),
       targetPath: targetPath.trim() || "/",
       type,
-      content: contentMode !== "url" ? content : undefined,
+      content: isBinaryItem ? editItem?.content : (contentMode !== "url" ? content : undefined),
       sourceUrl: contentMode === "url" ? sourceUrl.trim() : undefined,
       storageLocation,
+      isBinary: editItem?.isBinary,
+      size: editItem?.size,
     };
 
     if (context === "editor") {
@@ -406,43 +411,70 @@ export function AddConfigFileDialog({
             {/* Right Column — Takes all remaining width */}
             <div className="flex-1 flex flex-col gap-4 border-l border-border pl-0 md:pl-6 min-w-0">
 
-              {/* Content Mode Tabs */}
-              <div className="flex flex-col gap-3">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t("addConfigFile.contentEditor")}
-                </label>
+              {/* Content Mode Tabs or Binary Notice */}
+              {isBinaryItem ? (
+                <div className="flex flex-col gap-3">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    {t("editor.customFiles.binaryBadge", "Archivo binario")}
+                  </label>
+                  <div className="flex flex-col items-center justify-center p-8 text-center bg-muted/20 border border-border rounded-2xl min-h-[400px]">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/20 flex items-center justify-center text-amber-500 mb-3 shadow-inner">
+                      <FileArchive className="w-7 h-7" />
+                    </div>
+                    <p className="text-sm font-bold text-foreground max-w-sm truncate">{name || editItem?.name}</p>
+                    <p className="text-xs text-muted-foreground mt-2 max-w-sm leading-relaxed">
+                      {t(
+                        "editor.customFiles.binaryNoticeDesc",
+                        "Este archivo binario no se puede editar como texto en el editor web. Se empaquetará automáticamente en la carpeta de overrides al exportar el paquete."
+                      )}
+                    </p>
+                    <div className="flex items-center gap-2 mt-4 flex-wrap justify-center">
+                      <span className="text-xs font-mono px-2.5 py-1 bg-muted rounded-lg text-muted-foreground border border-border">
+                        {formatFileSize(editItem?.size)}
+                      </span>
+                      <span className="text-xs font-mono uppercase px-2.5 py-1 bg-amber-400/10 text-amber-500 rounded-lg border border-amber-400/20">
+                        .{editItem?.name?.split(".").pop()?.toUpperCase() || "BIN"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    {t("addConfigFile.contentEditor")}
+                  </label>
 
-                {/* Mode toggle pills (URL only when type === "multimedia") */}
-                {type === "multimedia" ? (
-                  <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-xl w-fit">
-                    <button
-                      type="button"
-                      disabled
-                      className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-amber-400 text-black shadow-sm cursor-default"
-                    >
-                      <Globe className="w-3.5 h-3.5" />
-                      {t("editor.customFiles.modes.url")}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-xl w-fit">
-                    {MODE_TABS.map((tab) => (
+                  {/* Mode toggle pills (URL only when type === "multimedia") */}
+                  {type === "multimedia" ? (
+                    <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-xl w-fit">
                       <button
-                        key={tab.id}
                         type="button"
-                        onClick={() => setContentMode(tab.id)}
-                        className={`flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
-                          contentMode === tab.id
-                            ? "bg-amber-400 text-black shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
+                        disabled
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-lg bg-amber-400 text-black shadow-sm cursor-default"
                       >
-                        {tab.icon}
-                        {t(tab.labelKey)}
+                        <Globe className="w-3.5 h-3.5" />
+                        {t("editor.customFiles.modes.url")}
                       </button>
-                    ))}
-                  </div>
-                )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-xl w-fit">
+                      {MODE_TABS.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setContentMode(tab.id)}
+                          className={`flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                            contentMode === tab.id
+                              ? "bg-amber-400 text-black shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {tab.icon}
+                          {t(tab.labelKey)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                 {/* Stable Height Container for Mode Editors */}
                 <div className="min-h-[420px] flex flex-col justify-start">
@@ -480,7 +512,7 @@ export function AddConfigFileDialog({
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".txt,.json,.yaml,.yml,.toml,.ini,.properties,.cfg,.conf,.log,.md,.js,.ts,.html,.css,.java,.py,.sh,.cmd,.bat,.mcmeta,.nbt"
+                        accept=".txt,.json,.yaml,.yml,.toml,.ini,.properties,.cfg,.conf,.log,.md,.js,.ts,.html,.css,.java,.py,.sh,.cmd,.bat,.mcmeta"
                         className="hidden"
                         onChange={handleFileUpload}
                       />
@@ -607,6 +639,7 @@ export function AddConfigFileDialog({
                 </div>
 
               </div>
+              )}
 
             </div>
           </div>

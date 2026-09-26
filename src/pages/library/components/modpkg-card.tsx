@@ -45,7 +45,7 @@ export function ModpkgCard({ pack, isActive, onOpenSettings }: ModpkgCardProps) 
   return (
     <>
       <div 
-        className={`group relative flex flex-col justify-between rounded-2xl p-5 transition-all duration-200 overflow-hidden bg-card dark:bg-[#1E1E1E] ${
+        className={`group relative flex flex-col justify-between rounded-2xl p-5 transition-[outline,outline-offset,box-shadow,background-color] duration-150 overflow-hidden bg-card dark:bg-[#1E1E1E] ${
           isActive 
             ? "outline outline-3 outline-[#FE5000] shadow-lg shadow-[#FE5000]/10" 
             : "outline outline-3 outline-transparent hover:outline-[#FE5000] hover:outline-offset-4 shadow-sm dark:shadow-none"

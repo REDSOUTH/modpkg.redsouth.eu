@@ -89,9 +89,9 @@ npm run preview
 
 ## Ecosystem & Links
 
-- **Official Web:** [modpkg.zmito.eu](https://modpkg.zmito.eu/)
-- **REDSOUTH Studio:** [redsouth.zmito.eu](https://redsouth.zmito.eu/)
-- **Launch Blog Post:** [Introducing MODPKG](https://redsouth.zmito.eu/blog/introducing-modpkg)
+- **Official Web:** [modpkg.redsouth.eu](https://modpkg.redsouth.eu/)
+- **REDSOUTH Studio:** [redsouth.eu](https://redsouth.eu/)
+- **Launch Blog Post:** [Introducing MODPKG](https://redsouth.eu/blog/introducing-modpkg)
 
 ---
 

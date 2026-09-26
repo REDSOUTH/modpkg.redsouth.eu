@@ -59,14 +59,14 @@ const contentContainer = {
   show: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.05
+      staggerChildren: 0.04
     }
   }
 };
 
 const contentItem = {
-  hidden: { opacity: 0, y: 20, scale: 0.98 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 300, damping: 24 } }
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.25, ease: "easeOut" } }
 };
 
 const ModCardSkeleton = () => (
@@ -117,7 +117,7 @@ export default function ModGrid({
   onCategoryClick
 }: ModGridProps) {
   const { t } = useTranslation();
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [mods, setMods] = useState<ModItemData[]>([]);
   const [limit, setLimit] = useState<string>("20");
   const [page, setPage] = useState<number>(1);
@@ -144,13 +144,21 @@ export default function ModGrid({
     window.scrollTo({ top: 0 });
   };
 
-  useEffect(() => {
-    handlePageChange(1);
-  }, [debouncedQuery, provider, contentType, selectedCategories, selectedEnvironments, sortBy, limit]);
+  const filterKey = `${debouncedQuery}|${provider}|${contentType}|${selectedCategories.join(",")}|${selectedEnvironments.join(",")}|${sortBy}|${limit}|${mcVersion}|${loader}|${customStorageVersion}`;
+  const prevFilterKeyRef = useRef<string>(filterKey);
 
   useEffect(() => {
     let mounted = true;
     setIsLoading(true);
+
+    let targetPage = page;
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey;
+      if (page !== 1) {
+        setPage(1);
+        targetPage = 1;
+      }
+    }
 
     // Helper for loader & MC version package compatibility & pack-level blacklisting
     const hiddenIds = getHiddenCustomItemIds(packSettings.id);
@@ -191,6 +199,7 @@ export default function ModGrid({
           const q = debouncedQuery.toLowerCase();
           return (
             item.name.toLowerCase().includes(q) ||
+            item.id.toLowerCase().includes(q) ||
             (item.author && item.author.toLowerCase().includes(q)) ||
             item.downloadUrl.toLowerCase().includes(q) ||
             (item.targetPath && item.targetPath.toLowerCase().includes(q))
@@ -224,7 +233,7 @@ export default function ModGrid({
     }
 
     // Standard API search logic (and search custom items when provider === 'all')
-    const offset = (page - 1) * parseInt(limit, 10);
+    const offset = (targetPage - 1) * parseInt(limit, 10);
     searchMods(
       debouncedQuery,
       provider,
@@ -264,6 +273,7 @@ export default function ModGrid({
 
                 return (
                   item.name.toLowerCase().includes(q) ||
+                  item.id.toLowerCase().includes(q) ||
                   (item.author && item.author.toLowerCase().includes(q)) ||
                   item.downloadUrl.toLowerCase().includes(q) ||
                   (item.targetPath && item.targetPath.toLowerCase().includes(q))
@@ -298,7 +308,7 @@ export default function ModGrid({
     });
 
     return () => { mounted = false; };
-  }, [debouncedQuery, provider, contentType, selectedCategories, selectedEnvironments, sortBy, limit, page, mcVersion, loader, customStorageVersion]);
+  }, [debouncedQuery, provider, contentType, selectedCategories, selectedEnvironments, sortBy, limit, page, mcVersion, loader, customStorageVersion, filterKey]);
 
   const contentTypeLabels: Record<string, string> = {
     mods: t("myResources.types.mods"),
@@ -334,7 +344,7 @@ export default function ModGrid({
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
               <Hash className="w-3.5 h-3.5 text-muted-foreground" />
-              {t("editor.grid.amount")}
+              {t("editor.grid.amount", { count: isLoading ? 0 : mods.length })}
             </span>
             <Select value={limit} onValueChange={setLimit}>
               <SelectTrigger className="w-[80px] bg-muted/70 border border-border text-foreground focus:ring-0 focus:border-[#FE5000] h-10 rounded-xl px-3 text-sm font-medium">
@@ -399,7 +409,7 @@ export default function ModGrid({
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-6"
           >
             {mods.map(mod => (
-              <motion.div key={mod.id} variants={contentItem}>
+              <motion.div key={`${mod.provider}-${mod.id}`} variants={contentItem}>
                 <ModCard 
                   mod={mod} 
                   onCategoryClick={onCategoryClick} 

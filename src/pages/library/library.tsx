@@ -102,14 +102,14 @@ export default function LibraryPage() {
             </div>
 
             {/* Cards Grid or Empty State */}
-            <AnimatePresence mode="wait">
+            <AnimatePresence initial={false}>
               {filteredPackages.length > 0 ? (
                 <motion.div
                   key="grid"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
+                  transition={{ duration: 0.1 }}
                   className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-8"
                 >
                   {filteredPackages.map((pkg) => (
@@ -127,6 +127,7 @@ export default function LibraryPage() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.1 }}
                   className="py-16 flex flex-col items-center justify-center"
                 >
                   <Empty className="w-full max-w-xl mx-auto py-8">

@@ -4,16 +4,18 @@ import {
   getPackagesIndex, 
   savePackagesIndex, 
   getPackData, 
+  getPackDataAsync,
   savePackData, 
   deletePackStorage,
   PackExclusiveData 
 } from "@/lib/storage/package-storage";
 import { detectFileType } from "@/lib/storage/config-files-storage";
+import { checkItemCompatibility } from "@/lib/api/verify-compatibility";
 
 const PackContext = createContext<PackContextType | null>(null);
 
 const DEFAULT_RELEASE_VERSIONS = [
-  "1.20.4",
+  "26.3",
   "1.20.2",
   "1.20.1",
   "1.20",
@@ -74,7 +76,7 @@ const DEFAULT_FALLBACK_PACK: PackSettings = {
   id: "modpkg-default",
   name: "MODPKG",
   slug: "modpkg-default",
-  mcVersion: "1.20.4",
+  mcVersion: "26.3",
   loader: "fabric",
   versions: ["v1.0.0"],
   currentVersion: "v1.0.0",
@@ -95,14 +97,34 @@ export function PackProvider({ children }: { children: ReactNode }) {
 
   const [installedContent, setInstalledContent] = useState<InstalledItem[]>([]);
   const [customFiles, setCustomFiles] = useState<CustomFileItem[]>([]);
+  const [verifiedItems, setVerifiedItemsState] = useState<string[]>([]);
+
+  const setVerifiedItems = (items: string[] | ((prev: string[]) => string[])) => {
+    setVerifiedItemsState(prev => {
+      const next = typeof items === "function" ? items(prev) : items;
+      if (activePackId) {
+        const data = getPackData(activePackId);
+        const curVer = packSettings.currentVersion || "v1.0.0";
+        if (data.releases && data.releases[curVer]) {
+          data.releases[curVer].verifiedItems = next;
+        }
+        data.verifiedItems = next;
+        savePackData(activePackId, data);
+      }
+      return next;
+    });
+  };
+
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [rawMcVersions, setRawMcVersions] = useState<MojangVersion[]>([]);
   const [rawLoaders, setRawLoaders] = useState<ModrinthLoaderTag[]>([]);
   const [isLoadingVersions, setIsLoadingVersions] = useState<boolean>(true);
-  const [latestMcRelease, setLatestMcRelease] = useState<string>("1.20.4");
+  const [latestMcRelease, setLatestMcRelease] = useState<string>("26.3");
   const [isCreatePackModalOpen, setIsCreatePackModalOpen] = useState<boolean>(false);
 
   // Load active pack data when activePackId changes
   useEffect(() => {
+    let isMounted = true;
     if (!activePackId) {
       if (packagesList.length === 0) {
         setIsCreatePackModalOpen(true);
@@ -111,49 +133,82 @@ export function PackProvider({ children }: { children: ReactNode }) {
     }
     const current = packagesList.find(p => p.id === activePackId) || getPackagesIndex().find(p => p.id === activePackId);
     if (current) {
-      setPackSettings(current);
-      const data = getPackData(current.id);
+      setPackSettings(prev => {
+        if (
+          prev.id === current.id && 
+          prev.mcVersion === current.mcVersion && 
+          prev.loader === current.loader && 
+          prev.currentVersion === current.currentVersion && 
+          prev.name === current.name
+        ) {
+          return prev;
+        }
+        return current;
+      });
       const curVer = current.currentVersion || "v1.0.0";
 
-      if (!data.releases) {
-        data.releases = {};
+      // Immediate synchronous load from memory / localStorage
+      const syncData = getPackData(current.id);
+      if (syncData.releases && syncData.releases[curVer]) {
+        setInstalledContent(syncData.releases[curVer].installedContent || []);
+        setCustomFiles(syncData.releases[curVer].customFiles || []);
+        setVerifiedItems(syncData.releases[curVer].verifiedItems || []);
+      } else {
+        setInstalledContent(syncData.installedContent || []);
+        setCustomFiles(syncData.customFiles || []);
+        setVerifiedItems(syncData.verifiedItems || []);
       }
 
-      if (!data.releases[curVer]) {
-        data.releases[curVer] = {
-          releaseId: curVer,
-          minecraft: current.mcVersion,
-          loader: {
-            type: current.loader,
-            version: current.loaderVersion || "latest",
-          },
-          installedContent: data.installedContent || [],
-          customFiles: data.customFiles || [],
-          publishedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-      }
+      // Asynchronous hydration from IndexedDB (full persistent data without quota limit)
+      getPackDataAsync(current.id).then((data) => {
+        if (!isMounted) return;
+        if (!data.releases) {
+          data.releases = {};
+        }
 
-      // Ensure all versions in current.versions exist in releases
-      (current.versions || [curVer]).forEach(v => {
-        if (!data.releases![v]) {
-          data.releases![v] = {
-            releaseId: v,
+        if (!data.releases[curVer]) {
+          data.releases[curVer] = {
+            releaseId: curVer,
             minecraft: current.mcVersion,
-            loader: { type: current.loader, version: current.loaderVersion || "latest" },
-            installedContent: v === curVer ? [...(data.installedContent || [])] : [],
-            customFiles: v === curVer ? [...(data.customFiles || [])] : [],
+            loader: {
+              type: current.loader,
+              version: current.loaderVersion || "latest",
+            },
+            installedContent: data.installedContent || [],
+            customFiles: data.customFiles || [],
             publishedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            verifiedItems: data.verifiedItems || [],
           };
         }
-      });
-      savePackData(current.id, data);
 
-      const activeRelease = data.releases[curVer];
-      setInstalledContent(activeRelease.installedContent || []);
-      setCustomFiles(activeRelease.customFiles || []);
+        // Ensure all versions in current.versions exist in releases
+        (current.versions || [curVer]).forEach(v => {
+          if (!data.releases![v]) {
+            data.releases![v] = {
+              releaseId: v,
+              minecraft: current.mcVersion,
+              loader: { type: current.loader, version: current.loaderVersion || "latest" },
+              installedContent: v === curVer ? [...(data.installedContent || [])] : [],
+              customFiles: v === curVer ? [...(data.customFiles || [])] : [],
+              publishedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              verifiedItems: v === curVer ? [...(data.verifiedItems || [])] : [],
+            };
+          }
+        });
+
+        const activeRelease = data.releases[curVer];
+        setInstalledContent(activeRelease.installedContent || []);
+        setCustomFiles(activeRelease.customFiles || []);
+        setVerifiedItems(activeRelease.verifiedItems || []);
+      }).catch(err => {
+        console.warn("Failed to load pack data from IndexedDB:", err);
+      });
     }
+    return () => {
+      isMounted = false;
+    };
   }, [activePackId, packagesList]);
 
   // Fetch real Minecraft versions from Mojang API & Modrinth loaders
@@ -269,6 +324,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
     setPackSettings(newPack);
     setInstalledContent([]);
     setCustomFiles([]);
+    setVerifiedItems([]);
     setIsCreatePackModalOpen(false);
 
     return newPack;
@@ -330,7 +386,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
         const r = rawReleases[ver] || {};
         finalReleases[ver] = {
           releaseId: ver,
-          minecraft: r.minecraft || proj.mcVersion || "1.20.4",
+          minecraft: r.minecraft || proj.mcVersion || "26.3",
           loader: {
             type: r.loader?.type || proj.loader || "fabric",
             version: r.loader?.version || proj.loaderVersion || "latest",
@@ -350,7 +406,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
         id: targetId,
         name: packName,
         slug: proj.slug || targetId,
-        mcVersion: proj.mcVersion || activeRelease?.minecraft || "1.20.4",
+        mcVersion: proj.mcVersion || activeRelease?.minecraft || "26.3",
         loader: proj.loader || activeRelease?.loader?.type || "fabric",
         loaderVersion: proj.loaderVersion || activeRelease?.loader?.version || "latest",
         versions,
@@ -420,7 +476,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
       ? (parsedJson.description || "Legacy MODPKG package")
       : (metadata.description || parsedJson.description || "Imported package");
 
-    const mcVersion = parsedJson.minecraftVersion || dependencies.minecraft || parsedJson.mcVersion || parsedJson.gameVersion || "1.20.4";
+    const mcVersion = parsedJson.minecraftVersion || dependencies.minecraft || parsedJson.mcVersion || parsedJson.gameVersion || "26.3";
     const loader = (typeof dependencies.loader === "object" ? dependencies.loader.type : dependencies.loader)
       || (typeof parsedJson.loader === "object" ? parsedJson.loader.id || parsedJson.loader.type : parsedJson.loader)
       || "fabric";
@@ -611,10 +667,12 @@ export function PackProvider({ children }: { children: ReactNode }) {
           }),
           installedContent: installedContent,
           customFiles: customFiles,
+          verifiedItems: verifiedItems,
           updatedAt: new Date().toISOString(),
         };
         curData.installedContent = installedContent;
         curData.customFiles = customFiles;
+        curData.verifiedItems = verifiedItems;
         savePackData(activePackId, curData);
       }
       return;
@@ -633,10 +691,12 @@ export function PackProvider({ children }: { children: ReactNode }) {
         }),
         installedContent: installedContent,
         customFiles: customFiles,
+        verifiedItems: verifiedItems,
         updatedAt: new Date().toISOString(),
       };
       prevData.installedContent = installedContent;
       prevData.customFiles = customFiles;
+      prevData.verifiedItems = verifiedItems;
       savePackData(activePackId, prevData);
     }
 
@@ -654,6 +714,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
         loader: { type: target.loader, version: target.loaderVersion || "latest" },
         installedContent: data.installedContent || [],
         customFiles: data.customFiles || [],
+        verifiedItems: data.verifiedItems || [],
         publishedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -662,6 +723,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
     const activeRel = data.releases[curVer];
     setInstalledContent(activeRel.installedContent || []);
     setCustomFiles(activeRel.customFiles || []);
+    setVerifiedItems(activeRel.verifiedItems || []);
   };
 
   // Delete package
@@ -687,6 +749,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
             loader: { type: nextPack.loader, version: nextPack.loaderVersion || "latest" },
             installedContent: data.installedContent || [],
             customFiles: data.customFiles || [],
+            verifiedItems: data.verifiedItems || [],
             publishedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -695,11 +758,13 @@ export function PackProvider({ children }: { children: ReactNode }) {
         const activeRel = data.releases[curVer];
         setInstalledContent(activeRel.installedContent || []);
         setCustomFiles(activeRel.customFiles || []);
+        setVerifiedItems(activeRel.verifiedItems || []);
       } else {
         setActivePackId(null);
         setPackSettings(DEFAULT_FALLBACK_PACK);
         setInstalledContent([]);
         setCustomFiles([]);
+        setVerifiedItems([]);
         setIsCreatePackModalOpen(true);
       }
     }
@@ -735,6 +800,7 @@ export function PackProvider({ children }: { children: ReactNode }) {
         }),
         installedContent: installedContent,
         customFiles: customFiles,
+        verifiedItems: verifiedItems,
         updatedAt: new Date().toISOString(),
       };
     }
@@ -750,35 +816,81 @@ export function PackProvider({ children }: { children: ReactNode }) {
         },
         installedContent: [],
         customFiles: [],
+        verifiedItems: [],
         publishedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      if (newSettings.mcVersion) targetRelease.minecraft = newSettings.mcVersion;
+      if (newSettings.loader) {
+        if (!targetRelease.loader) targetRelease.loader = { type: newSettings.loader, version: targetPack.loaderVersion || "latest" };
+        else targetRelease.loader.type = newSettings.loader;
+      }
       packData.releases[newVersion] = targetRelease;
       packData.installedContent = targetRelease.installedContent || [];
       packData.customFiles = targetRelease.customFiles || [];
+      packData.verifiedItems = targetRelease.verifiedItems || [];
 
       if (isTargetActive) {
         setInstalledContent(targetRelease.installedContent || []);
         setCustomFiles(targetRelease.customFiles || []);
+        setVerifiedItems(targetRelease.verifiedItems || []);
       }
     } else {
-      if (packData.releases[prevVersion]) {
-        if (newSettings.mcVersion) packData.releases[prevVersion].minecraft = newSettings.mcVersion;
-        if (newSettings.loader) {
-          packData.releases[prevVersion].loader = {
-            type: newSettings.loader,
-            version: targetPack.loaderVersion || "latest",
-          };
+      if (!packData.releases[prevVersion]) {
+        packData.releases[prevVersion] = {
+          releaseId: prevVersion,
+          minecraft: targetPack.mcVersion,
+          loader: { type: targetPack.loader, version: targetPack.loaderVersion || "latest" },
+          installedContent: installedContent,
+          customFiles: customFiles,
+          verifiedItems: verifiedItems,
+          publishedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      const mcChanged = Boolean(newSettings.mcVersion && newSettings.mcVersion !== targetPack.mcVersion);
+      const loaderChanged = Boolean(newSettings.loader && newSettings.loader !== targetPack.loader);
+      if (mcChanged || loaderChanged) {
+        // Reset verifications for this version
+        packData.releases[prevVersion].verifiedItems = [];
+        packData.verifiedItems = [];
+        if (isTargetActive) {
+          setVerifiedItems([]);
         }
       }
+      if (newSettings.mcVersion) packData.releases[prevVersion].minecraft = newSettings.mcVersion;
+      if (newSettings.loader) {
+        packData.releases[prevVersion].loader = {
+          type: newSettings.loader,
+          version: targetPack.loaderVersion || "latest",
+        };
+      }
+      packData.installedContent = packData.releases[prevVersion].installedContent || installedContent;
+      packData.customFiles = packData.releases[prevVersion].customFiles || customFiles;
     }
 
     // 3. If ID is changing, migrate storage to the new ID
     const finalId = isChangingId ? requestedNewId : prevId;
     if (isChangingId) {
+      if (isTargetActive) {
+        packData.installedContent = installedContent;
+        packData.customFiles = customFiles;
+        if (packData.releases && packData.releases[prevVersion]) {
+          packData.releases[prevVersion].installedContent = installedContent;
+          packData.releases[prevVersion].customFiles = customFiles;
+        }
+      }
       packData.id = finalId;
       savePackData(finalId, packData);
       deletePackStorage(prevId);
+
+      // In the background, ensure full IDB data is migrated to finalId
+      getPackDataAsync(prevId).then((fullIdbData) => {
+        if (fullIdbData && fullIdbData.customFiles && fullIdbData.customFiles.length > packData.customFiles.length) {
+          fullIdbData.id = finalId;
+          savePackData(finalId, fullIdbData);
+        }
+      }).catch(err => console.warn("Background IDB migration check failed:", err));
 
       // Also migrate hidden custom items if present
       try {
@@ -986,6 +1098,84 @@ export function PackProvider({ children }: { children: ReactNode }) {
         if (!packData.releases) packData.releases = {};
         if (packData.releases[curVer]) {
           packData.releases[curVer].installedContent = updated;
+          packData.releases[curVer].verifiedItems = (packData.releases[curVer].verifiedItems || []).filter(vId => vId !== id);
+          packData.releases[curVer].updatedAt = new Date().toISOString();
+        }
+        packData.verifiedItems = (packData.verifiedItems || []).filter(vId => vId !== id);
+        savePackData(activePackId, packData);
+      }
+      return updated;
+    });
+    setVerifiedItems(prev => prev.filter(vId => vId !== id));
+  };
+
+  const verifyPackContents = async (): Promise<{ verifiedCount: number; totalCount: number; failedNames: string[] }> => {
+    if (installedContent.length === 0) {
+      return { verifiedCount: 0, totalCount: 0, failedNames: [] };
+    }
+
+    setIsVerifying(true);
+    const newlyVerifiedIds: string[] = [];
+    const failedNames: string[] = [];
+
+    try {
+      const results = await Promise.allSettled(
+        installedContent.map(async (item) => {
+          const res = await checkItemCompatibility(item, packSettings.mcVersion, packSettings.loader);
+          return { item, ...res };
+        })
+      );
+
+      results.forEach((r) => {
+        if (r.status === "fulfilled" && r.value.isCompatible) {
+          newlyVerifiedIds.push(r.value.item.id);
+        } else if (r.status === "fulfilled" && !r.value.isCompatible) {
+          failedNames.push(r.value.item.name);
+        }
+      });
+
+      setVerifiedItems(newlyVerifiedIds);
+
+      if (activePackId) {
+        const data = getPackData(activePackId);
+        const curVer = packSettings.currentVersion || "v1.0.0";
+        if (data.releases && data.releases[curVer]) {
+          data.releases[curVer].verifiedItems = newlyVerifiedIds;
+        }
+        data.verifiedItems = newlyVerifiedIds;
+        savePackData(activePackId, data);
+      }
+
+      return {
+        verifiedCount: newlyVerifiedIds.length,
+        totalCount: installedContent.length,
+        failedNames,
+      };
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const addCustomFile = (file: CustomFileItem) => {
+    setCustomFiles(prev => {
+      const updated = [file, ...prev.filter(f => f.id !== file.id)];
+      if (activePackId) {
+        const packData = getPackData(activePackId);
+        packData.customFiles = updated;
+        const curVer = packSettings.currentVersion || "v1.0.0";
+        if (!packData.releases) packData.releases = {};
+        if (!packData.releases[curVer]) {
+          packData.releases[curVer] = {
+            releaseId: curVer,
+            minecraft: packSettings.mcVersion,
+            loader: { type: packSettings.loader, version: packSettings.loaderVersion || "latest" },
+            installedContent: installedContent,
+            customFiles: updated,
+            publishedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        } else {
+          packData.releases[curVer].customFiles = updated;
           packData.releases[curVer].updatedAt = new Date().toISOString();
         }
         savePackData(activePackId, packData);
@@ -994,9 +1184,13 @@ export function PackProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const addCustomFile = (file: CustomFileItem) => {
+  const addCustomFilesBatch = (newFiles: CustomFileItem[]) => {
+    if (!newFiles || newFiles.length === 0) return;
     setCustomFiles(prev => {
-      const updated = [file, ...prev.filter(f => f.id !== file.id)];
+      const newPaths = new Set(newFiles.map(f => (f.targetPath || f.name).toLowerCase().replace(/^\/+/, "")));
+      const filteredPrev = prev.filter(f => !newPaths.has((f.targetPath || f.name).toLowerCase().replace(/^\/+/, "")));
+      const updated = [...newFiles, ...filteredPrev];
+
       if (activePackId) {
         const packData = getPackData(activePackId);
         packData.customFiles = updated;
@@ -1058,6 +1252,48 @@ export function PackProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const removeCustomFilesBatch = (idsToRemove: string[]) => {
+    if (!idsToRemove || idsToRemove.length === 0) return;
+    const removeSet = new Set(idsToRemove);
+    setCustomFiles(prev => {
+      const updated = prev.filter(f => !removeSet.has(f.id));
+      if (activePackId) {
+        const packData = getPackData(activePackId);
+        packData.customFiles = updated;
+        const curVer = packSettings.currentVersion || "v1.0.0";
+        if (!packData.releases) packData.releases = {};
+        if (packData.releases[curVer]) {
+          packData.releases[curVer].customFiles = updated;
+          packData.releases[curVer].updatedAt = new Date().toISOString();
+        }
+        savePackData(activePackId, packData);
+      }
+      return updated;
+    });
+  };
+
+  const removeCustomFolder = (folderPath: string) => {
+    const cleanFolder = folderPath.replace(/^\/+/, "").replace(/\/+$/, "");
+    setCustomFiles(prev => {
+      const updated = prev.filter(file => {
+        const cleanPath = (file.targetPath || file.name).replace(/^\/+/, "");
+        return !(cleanPath === cleanFolder || cleanPath.startsWith(`${cleanFolder}/`));
+      });
+      if (activePackId) {
+        const packData = getPackData(activePackId);
+        packData.customFiles = updated;
+        const curVer = packSettings.currentVersion || "v1.0.0";
+        if (!packData.releases) packData.releases = {};
+        if (packData.releases[curVer]) {
+          packData.releases[curVer].customFiles = updated;
+          packData.releases[curVer].updatedAt = new Date().toISOString();
+        }
+        savePackData(activePackId, packData);
+      }
+      return updated;
+    });
+  };
+
   return (
     <PackContext.Provider
       value={{
@@ -1080,10 +1316,17 @@ export function PackProvider({ children }: { children: ReactNode }) {
         removeContent,
         customFiles,
         addCustomFile,
+        addCustomFilesBatch,
         updateCustomFile,
         removeCustomFile,
+        removeCustomFilesBatch,
+        removeCustomFolder,
         isCreatePackModalOpen,
         setIsCreatePackModalOpen,
+        verifiedItems,
+        setVerifiedItems,
+        isVerifying,
+        verifyPackContents,
       }}
     >
       {children}

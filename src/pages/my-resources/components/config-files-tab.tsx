@@ -21,13 +21,9 @@ export function ConfigFilesTab({
   selectedType = "all",
 }: ConfigFilesTabProps) {
   const { t } = useTranslation();
-  const [items, setItems] = useState<CustomFileItem[]>([]);
+  const [items, setItems] = useState<CustomFileItem[]>(() => getCustomFileItems());
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<CustomFileItem | null>(null);
-
-  useEffect(() => {
-    setItems(getCustomFileItems());
-  }, []);
 
   const openAddDialog = useCallback(() => {
     setEditingItem(null);
@@ -92,13 +88,14 @@ export function ConfigFilesTab({
         </div>
 
         {/* Table / Empty state */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence initial={false}>
           {filteredItems.length > 0 ? (
             <motion.div
               key="table"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.1 }}
               className="w-full pb-6"
             >
               <ConfigFilesTable items={filteredItems} onDelete={handleDelete} onEdit={handleEdit} />
@@ -109,6 +106,7 @@ export function ConfigFilesTab({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.1 }}
               className="col-span-full py-8 flex flex-col items-center justify-center"
             >
               <Empty className="w-full max-w-xl mx-auto py-6">

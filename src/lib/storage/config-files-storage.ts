@@ -121,3 +121,46 @@ export function detectMonacoLanguage(targetPath: string): string {
   };
   return map[ext] ?? "plaintext";
 }
+
+export const UNSUPPORTED_BINARY_EXTENSIONS = new Set([
+  // Archives & packages
+  "jar", "zip", "tar", "gz", "7z", "rar", "bz2", "pak",
+  // Minecraft binary formats
+  "dat", "dat_old", "nbt", "mca", "mcr", "schem", "schematic",
+  // Executables & libraries
+  "class", "exe", "dll", "so", "dylib", "bin",
+  // Fonts
+  "ttf", "otf", "woff", "woff2",
+]);
+
+export const MEDIA_IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
+export const MEDIA_AUDIO_EXTS = new Set(["mp3", "ogg", "wav", "flac"]);
+export const MEDIA_VIDEO_EXTS = new Set(["mp4", "webm", "ogv"]);
+
+export function getFileExtension(filename: string): string {
+  return (filename.split(".").pop() || "").toLowerCase();
+}
+
+export function isMediaFile(file: CustomFileItem | null | undefined): boolean {
+  if (!file) return false;
+  if (file.type === "multimedia") return true;
+  const ext = getFileExtension(file.name || file.targetPath || "");
+  return MEDIA_IMAGE_EXTS.has(ext) || MEDIA_AUDIO_EXTS.has(ext) || MEDIA_VIDEO_EXTS.has(ext);
+}
+
+export function isUnsupportedBinary(file: CustomFileItem | null | undefined): boolean {
+  if (!file) return false;
+  const ext = getFileExtension(file.name || file.targetPath || "");
+  if (UNSUPPORTED_BINARY_EXTENSIONS.has(ext)) return true;
+  if (file.isBinary && !isMediaFile(file)) return true;
+  return false;
+}
+
+export function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+

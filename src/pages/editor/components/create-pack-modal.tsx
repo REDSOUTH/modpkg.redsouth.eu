@@ -24,7 +24,7 @@ export default function CreatePackModal({ isOpen, onClose }: { isOpen: boolean; 
   const [name, setName] = useState<string>("MODPKG");
   const [id, setId] = useState<string>("");
   const [isIdCustomized, setIsIdCustomized] = useState<boolean>(false);
-  const [mcVersion, setMcVersion] = useState<string>("1.20.4");
+  const [mcVersion, setMcVersion] = useState<string>("26.3");
   const [loader, setLoader] = useState<string>("fabric");
   const [version, setVersion] = useState<string>("v1.0.0");
   const [description, setDescription] = useState<string>("Mi modpack personalizado creado con MODPKG");
@@ -42,7 +42,7 @@ export default function CreatePackModal({ isOpen, onClose }: { isOpen: boolean; 
       setId(generatedId);
       setIsIdCustomized(false);
       const availableMc = getMinecraftVersions(false);
-      setMcVersion(availableMc[0] || "1.20.4");
+      setMcVersion(availableMc[0] || "26.3");
       setLoader("fabric");
       setVersion("v1.0.0");
       setDescription("Mi modpack personalizado creado con MODPKG");
@@ -155,7 +155,7 @@ export default function CreatePackModal({ isOpen, onClose }: { isOpen: boolean; 
               </div>
               <Select value={mcVersion} onValueChange={setMcVersion}>
                 <SelectTrigger className="bg-muted/70 border-2 border-border text-foreground focus:ring-0 focus:border-[#FE5000] h-11 rounded-xl">
-                  <SelectValue placeholder="1.20.4" />
+                  <SelectValue placeholder="26.3" />
                 </SelectTrigger>
                 <SelectContent className="bg-popover border-2 border-border text-popover-foreground rounded-xl max-h-60 custom-scrollbar">
                   {mcVersionsList.map((ver) => (

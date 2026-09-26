@@ -13,8 +13,19 @@ import {
   Plus,
   Layers,
   FileCode,
-  X
+  FolderUp,
+  X,
+  Archive,
+  Database,
+  Binary,
+  Download,
+  RefreshCw,
+  FileArchive,
+  Image as ImageIcon,
+  Music,
+  Video
 } from "lucide-react";
+import { toast } from "sonner";
 import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,9 +39,21 @@ import { AddConfigFileDialog } from "@/components/views/add-config-file-dialog";
 import { usePack } from "@/context/pack-context";
 import { CustomFileItem, CustomFileType } from "@/types";
 import { 
+  extractFilesFromDrop, 
+  normalizeImportPaths, 
+  processFileToCustomItem 
+} from "@/lib/folder-import";
+import { 
   CUSTOM_FILE_TYPES, 
   detectFileType, 
-  detectMonacoLanguage 
+  detectMonacoLanguage,
+  isUnsupportedBinary,
+  isMediaFile,
+  formatFileSize,
+  getFileExtension,
+  MEDIA_IMAGE_EXTS,
+  MEDIA_AUDIO_EXTS,
+  MEDIA_VIDEO_EXTS,
 } from "@/lib/storage/config-files-storage";
 import { useTheme } from "@/components/theme-provider";
 import { cn } from "@/lib/utils";
@@ -38,6 +61,20 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 
 type ContentMode = "edit" | "upload" | "url";
+
+function getBinaryIcon(fileName: string) {
+  const ext = getFileExtension(fileName);
+  if (["jar", "zip", "tar", "gz", "7z", "rar", "bz2", "pak"].includes(ext)) {
+    return <Archive className="w-8 h-8" />;
+  }
+  if (["dat", "dat_old", "nbt", "mca", "mcr", "schem", "schematic"].includes(ext)) {
+    return <Database className="w-8 h-8" />;
+  }
+  if (["class", "exe", "dll", "so", "dylib", "bin"].includes(ext)) {
+    return <Binary className="w-8 h-8" />;
+  }
+  return <FileArchive className="w-8 h-8" />;
+}
 
 const getUrlMediaType = (url: string, fileType?: CustomFileType): "image" | "video" | "audio" | "other" => {
   if (fileType === "multimedia") return "image";
@@ -62,7 +99,106 @@ export function CustomFilesWorkspace({
   const { t } = useTranslation();
   const { theme } = useTheme();
   const monacoTheme = theme === "light" ? "light" : "vs-dark";
-  const { customFiles, updateCustomFile, removeCustomFile } = usePack();
+  const { customFiles, updateCustomFile, removeCustomFile, addCustomFilesBatch } = usePack();
+
+  const workspaceFolderInputRef = useRef<HTMLInputElement>(null);
+  const [isDraggingWorkspaceFolder, setIsDraggingWorkspaceFolder] = useState(false);
+  const workspaceDragCounter = useRef(0);
+
+  const processAndImportWorkspaceFiles = async (rawFiles: { file: File; path: string }[]) => {
+    if (rawFiles.length === 0) return;
+    const totalFiles = rawFiles.length;
+    const toastId = toast.loading(
+      t("editor.fileTree.importingProgress", { count: totalFiles })
+    );
+
+    try {
+      const normalized = normalizeImportPaths(rawFiles);
+      const items: CustomFileItem[] = [];
+      const CHUNK_SIZE = 50;
+
+      for (let i = 0; i < normalized.length; i += CHUNK_SIZE) {
+        const chunk = normalized.slice(i, i + CHUNK_SIZE);
+        const chunkItems = await Promise.all(
+          chunk.map((entry) => processFileToCustomItem(entry.file, entry.cleanPath))
+        );
+        items.push(...chunkItems);
+
+        if (totalFiles > 100 && (i % 150 === 0 || i + CHUNK_SIZE >= normalized.length)) {
+          const currentProcessed = Math.min(i + CHUNK_SIZE, totalFiles);
+          toast.loading(
+            t("editor.fileTree.importingProgressDetailed", {
+              current: currentProcessed,
+              total: totalFiles,
+            }),
+            { id: toastId }
+          );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      addCustomFilesBatch(items);
+      toast.success(t("editor.fileTree.importSuccess", { count: items.length }), { id: toastId });
+    } catch (err: any) {
+      console.error("Failed to import files:", err);
+      toast.error(t("editor.fileTree.importError", "Error al importar archivos"), { id: toastId });
+    }
+  };
+
+  const handleWorkspaceFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const filesArray = Array.from(fileList);
+    const rawEntries = filesArray.map((f) => ({
+      file: f,
+      path: f.webkitRelativePath || f.name,
+    }));
+    await processAndImportWorkspaceFiles(rawEntries);
+    if (workspaceFolderInputRef.current) {
+      workspaceFolderInputRef.current.value = "";
+    }
+  };
+
+  const handleWorkspaceDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    workspaceDragCounter.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDraggingWorkspaceFolder(true);
+    }
+  };
+
+  const handleWorkspaceDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleWorkspaceDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    workspaceDragCounter.current--;
+    if (workspaceDragCounter.current <= 0) {
+      setIsDraggingWorkspaceFolder(false);
+      workspaceDragCounter.current = 0;
+    }
+  };
+
+  const handleWorkspaceDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingWorkspaceFolder(false);
+    workspaceDragCounter.current = 0;
+
+    if (!e.dataTransfer) return;
+    const extracted = await extractFilesFromDrop(e.dataTransfer);
+    const rawEntries = extracted.map((item) => ({
+      file: item.file,
+      path: item.relativePath,
+    }));
+    await processAndImportWorkspaceFiles(rawEntries);
+  };
 
   const MODE_TABS: { id: ContentMode; label: string; icon: React.ReactNode }[] = [
     { id: "edit", label: t("editor.customFiles.modes.edit"), icon: <Code2 className="w-3.5 h-3.5" /> },
@@ -112,6 +248,56 @@ export function CustomFilesWorkspace({
 
   const monacoLang = detectMonacoLanguage(draftTargetPath);
   const mediaType = getUrlMediaType(draftSourceUrl, draftType);
+
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const isBinary = isUnsupportedBinary(file);
+  const isMedia = isMediaFile(file);
+
+  const handleDownloadFile = () => {
+    if (!file) return;
+    if (file.sourceUrl) {
+      window.open(file.sourceUrl, "_blank");
+      return;
+    }
+    if (!file.content) return;
+    const link = document.createElement("a");
+    link.href = file.content.startsWith("data:")
+      ? file.content
+      : `data:application/octet-stream;base64,${file.content}`;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleReplaceBinaryFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newFile = e.target.files?.[0];
+    if (!newFile || !file) return;
+    try {
+      const updatedItem = await processFileToCustomItem(newFile, file.targetPath);
+      const updated: CustomFileItem = {
+        ...file,
+        name: newFile.name,
+        content: updatedItem.content,
+        size: newFile.size,
+        isBinary: updatedItem.isBinary,
+        type: updatedItem.type,
+        updatedAt: new Date().toISOString(),
+      };
+      updateCustomFile(updated);
+      setDraftName(newFile.name);
+      setDraftContent(updatedItem.content ?? "");
+      setDraftType(updatedItem.type);
+      toast.success(t("editor.customFiles.fileReplaced", "Archivo reemplazado correctamente"));
+    } catch (err) {
+      console.error("Failed to replace file:", err);
+      toast.error(t("editor.customFiles.fileReplaceError", "Error al reemplazar el archivo"));
+    } finally {
+      if (replaceInputRef.current) {
+        replaceInputRef.current.value = "";
+      }
+    }
+  };
 
   const isDirty = file
     ? draftName !== file.name ||
@@ -214,7 +400,28 @@ export function CustomFilesWorkspace({
   // When no file is selected
   if (!file) {
     return (
-      <div className="flex-1 min-w-0 bg-background flex flex-col items-center justify-center p-8 text-center min-h-[calc(100vh-121px)]">
+      <div 
+        className="relative flex-1 min-w-0 bg-background flex flex-col items-center justify-center p-8 text-center min-h-[calc(100vh-121px)]"
+        onDragEnter={handleWorkspaceDragEnter}
+        onDragOver={handleWorkspaceDragOver}
+        onDragLeave={handleWorkspaceDragLeave}
+        onDrop={handleWorkspaceDrop}
+      >
+        {/* Drag Over Overlay */}
+        {isDraggingWorkspaceFolder && (
+          <div className="absolute inset-4 z-50 rounded-3xl bg-background/90 backdrop-blur-sm border-2 border-dashed border-amber-400 flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-150 pointer-events-none">
+            <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center mb-3">
+              <FolderUp className="w-7 h-7 text-amber-500 animate-bounce" />
+            </div>
+            <p className="text-base font-bold text-foreground">
+              {t("editor.fileTree.dropToUpload", "Suelta las carpetas o archivos aquí")}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+              {t("editor.fileTree.dropToUploadDesc", "Se importarán manteniendo su jerarquía de directorios")}
+            </p>
+          </div>
+        )}
+
         <Empty className="max-w-md">
           <EmptyHeader>
             <EmptyMedia variant="icon" className="bg-amber-400/10 border border-amber-400/20 text-amber-400">
@@ -229,13 +436,34 @@ export function CustomFilesWorkspace({
                 : t("editor.customFiles.noSelectedDesc")}
             </EmptyDescription>
           </EmptyHeader>
-          <Button
-            onClick={onOpenAddDialog}
-            className="bg-amber-400 text-black hover:bg-amber-300 rounded-xl px-5 h-11 font-semibold outline outline-2 outline-transparent hover:outline-amber-400/50 hover:outline-offset-2 active:scale-95 transition-all mt-4"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            {t("editor.customFiles.addCustomFile")}
-          </Button>
+          <div className="flex items-center gap-3 mt-4">
+            <Button
+              onClick={onOpenAddDialog}
+              className="bg-amber-400 text-black hover:bg-amber-300 rounded-xl px-5 h-11 font-semibold outline outline-2 outline-transparent hover:outline-amber-400/50 hover:outline-offset-2 active:scale-95 transition-all"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              {t("editor.customFiles.addCustomFile")}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => workspaceFolderInputRef.current?.click()}
+              className="rounded-xl px-5 h-11 font-semibold border-border hover:bg-muted text-foreground active:scale-95 transition-all gap-2"
+            >
+              <FolderUp className="w-4 h-4 text-amber-500" />
+              {t("editor.fileTree.uploadFolder")}
+            </Button>
+          </div>
+
+          <input
+            ref={workspaceFolderInputRef}
+            type="file"
+            // @ts-expect-error webkitdirectory is non-standard
+            webkitdirectory=""
+            directory=""
+            multiple
+            className="hidden"
+            onChange={handleWorkspaceFolderSelect}
+          />
         </Empty>
       </div>
     );
@@ -278,8 +506,22 @@ export function CustomFilesWorkspace({
 
         {/* Right: Content Mode Tabs, Storage Badge & Actions */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Content Mode Tabs */}
-          {draftType === "multimedia" ? (
+          {/* Content Mode Tabs or Binary / Media Badge */}
+          {isBinary ? (
+            <div className="flex items-center gap-1.5 bg-muted/60 px-3 py-1.5 rounded-xl border border-border">
+              <FileArchive className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-xs font-semibold text-muted-foreground">
+                {t("editor.customFiles.binaryBadge", "Archivo binario")}
+              </span>
+            </div>
+          ) : isMedia ? (
+            <div className="flex items-center gap-1.5 bg-muted/60 px-3 py-1.5 rounded-xl border border-border">
+              <ImageIcon className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-xs font-semibold text-muted-foreground">
+                {t("editor.customFiles.multimediaBadge", "Multimedia")}
+              </span>
+            </div>
+          ) : draftType === "multimedia" ? (
             <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-xl">
               <span className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-400 text-black shadow-sm">
                 <Globe className="w-3.5 h-3.5" />
@@ -403,6 +645,173 @@ export function CustomFilesWorkspace({
 
       {/* Editor Main Content Area */}
       <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden bg-background">
+        {/* Dedicated Binary File View */}
+        {isBinary ? (
+          <div className="flex-1 p-8 flex flex-col items-center justify-center text-center overflow-y-auto custom-scrollbar">
+            <div className="max-w-md w-full bg-card border border-border/80 shadow-sm rounded-3xl p-8 flex flex-col items-center">
+              <div className="w-16 h-16 rounded-2xl bg-amber-400/10 border border-amber-400/25 flex items-center justify-center text-amber-500 mb-4 shadow-inner">
+                {getBinaryIcon(file.name)}
+              </div>
+
+              <h3 className="text-lg font-bold text-foreground truncate max-w-full px-2" title={file.name}>
+                {draftName || file.name}
+              </h3>
+
+              <p className="font-mono text-xs text-muted-foreground mt-1 mb-4 break-all bg-muted/60 px-3 py-1.5 rounded-xl border border-border/50">
+                {draftTargetPath || file.targetPath}
+              </p>
+
+              {/* Badges */}
+              <div className="flex items-center justify-center gap-2 mb-5 flex-wrap">
+                <span className="text-xs font-medium px-2.5 py-1 rounded-lg bg-muted text-muted-foreground border border-border">
+                  {formatFileSize(file.size || (file.content ? Math.round(file.content.length * 0.75) : 0))}
+                </span>
+                <span className="text-xs font-medium px-2.5 py-1 rounded-lg bg-amber-400/10 text-amber-600 dark:text-amber-400 border border-amber-400/20 uppercase font-mono">
+                  .{getFileExtension(file.name).toUpperCase() || "BIN"}
+                </span>
+                <StorageBadge storageType={file.storageLocation} />
+              </div>
+
+              <p className="text-xs text-muted-foreground max-w-sm mb-6 leading-relaxed">
+                {t(
+                  "editor.customFiles.binaryNoticeDesc",
+                  "Este archivo binario no se puede editar como texto en el editor web. Se empaquetará automáticamente en la carpeta de overrides al exportar el paquete."
+                )}
+              </p>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2.5 flex-wrap justify-center w-full">
+                {(file.content || file.sourceUrl) && (
+                  <Button
+                    variant="outline"
+                    onClick={handleDownloadFile}
+                    className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 border-border hover:bg-muted active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-amber-500" />
+                    {t("editor.customFiles.downloadFile", "Descargar")}
+                  </Button>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={() => replaceInputRef.current?.click()}
+                  className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 border-border hover:bg-muted active:scale-95 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
+                  {t("editor.customFiles.replaceFile", "Reemplazar")}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsConfirmDeleteOpen(true)}
+                  className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {t("common.delete", "Eliminar")}
+                </Button>
+              </div>
+
+              <input
+                ref={replaceInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleReplaceBinaryFile}
+              />
+            </div>
+          </div>
+        ) : isMedia ? (
+          /* Media Preview View (Image, Audio, Video) */
+          <div className="flex-1 p-8 flex flex-col items-center justify-center text-center overflow-y-auto custom-scrollbar">
+            <div className="max-w-lg w-full bg-card border border-border/80 shadow-sm rounded-3xl p-6 flex flex-col items-center">
+              {/* Media Container */}
+              <div className="w-full flex items-center justify-center p-4 bg-muted/30 rounded-2xl overflow-hidden border border-border mb-4 min-h-[200px] max-h-[360px]">
+                {MEDIA_IMAGE_EXTS.has(getFileExtension(file.name)) ? (
+                  <img
+                    src={file.content?.startsWith("data:") ? file.content : (file.sourceUrl || file.content)}
+                    alt={file.name}
+                    className="max-h-72 object-contain rounded-lg shadow-sm"
+                  />
+                ) : MEDIA_AUDIO_EXTS.has(getFileExtension(file.name)) ? (
+                  <div className="w-full py-6 flex flex-col items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-amber-400/10 border border-amber-400/20 flex items-center justify-center text-amber-500">
+                      <Music className="w-6 h-6" />
+                    </div>
+                    <audio
+                      src={file.content?.startsWith("data:") ? file.content : (file.sourceUrl || file.content)}
+                      controls
+                      className="w-full max-w-sm"
+                    />
+                  </div>
+                ) : MEDIA_VIDEO_EXTS.has(getFileExtension(file.name)) ? (
+                  <video
+                    src={file.content?.startsWith("data:") ? file.content : (file.sourceUrl || file.content)}
+                    controls
+                    className="max-h-72 w-full rounded-lg"
+                  />
+                ) : null}
+              </div>
+
+              <h3 className="text-base font-bold text-foreground truncate max-w-full px-2" title={file.name}>
+                {draftName || file.name}
+              </h3>
+
+              <p className="font-mono text-xs text-muted-foreground mt-1 mb-4 break-all bg-muted/60 px-3 py-1 rounded-xl border border-border/50">
+                {draftTargetPath || file.targetPath}
+              </p>
+
+              {/* Badges */}
+              <div className="flex items-center justify-center gap-2 mb-5 flex-wrap">
+                <span className="text-xs font-medium px-2.5 py-1 rounded-lg bg-muted text-muted-foreground border border-border">
+                  {formatFileSize(file.size || (file.content ? Math.round(file.content.length * 0.75) : 0))}
+                </span>
+                <span className="text-xs font-medium px-2.5 py-1 rounded-lg bg-amber-400/10 text-amber-600 dark:text-amber-400 border border-amber-400/20 uppercase font-mono">
+                  .{getFileExtension(file.name).toUpperCase()}
+                </span>
+                <StorageBadge storageType={file.storageLocation} />
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2.5 flex-wrap justify-center w-full">
+                {(file.content || file.sourceUrl) && (
+                  <Button
+                    variant="outline"
+                    onClick={handleDownloadFile}
+                    className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 border-border hover:bg-muted active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-amber-500" />
+                    {t("editor.customFiles.downloadFile", "Descargar")}
+                  </Button>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={() => replaceInputRef.current?.click()}
+                  className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 border-border hover:bg-muted active:scale-95 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
+                  {t("editor.customFiles.replaceFile", "Reemplazar")}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsConfirmDeleteOpen(true)}
+                  className="rounded-xl h-10 px-4 text-xs font-semibold gap-2 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {t("common.delete", "Eliminar")}
+                </Button>
+              </div>
+
+              <input
+                ref={replaceInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleReplaceBinaryFile}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
         {/* EDIT MODE: Monaco Code Editor */}
         {draftContentMode === "edit" && draftType !== "multimedia" && (
           <div className="flex-1 w-full h-full">
@@ -435,7 +844,7 @@ export function CustomFilesWorkspace({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.json,.yaml,.yml,.toml,.ini,.properties,.cfg,.conf,.log,.md,.js,.ts,.html,.css,.java,.py,.sh,.cmd,.bat,.mcmeta,.nbt"
+              accept=".txt,.json,.yaml,.yml,.toml,.ini,.properties,.cfg,.conf,.log,.md,.js,.ts,.html,.css,.java,.py,.sh,.cmd,.bat,.mcmeta"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -568,6 +977,8 @@ export function CustomFilesWorkspace({
               </div>
             )}
           </div>
+        )}
+          </>
         )}
       </div>
 

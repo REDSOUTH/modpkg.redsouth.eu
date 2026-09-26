@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Check, X, FilePlus, Copy, Trash2, Settings, Package } from "lucide-react";
 import { useState, useEffect, useRef, ChangeEvent, KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import { usePack } from "@/context/pack-context";
 import { getPackData } from "@/lib/storage/package-storage";
 import { PackSettingsModalProps, FieldLabelProps } from "@/types";
@@ -26,6 +27,7 @@ const sanitizeSlug = (str: string): string => {
 export default function PackSettingsModal({ 
   isOpen, 
   onClose, 
+  onCancel,
   focusField, 
   isCreateMode: propIsCreateMode = false,
   pack,
@@ -42,6 +44,22 @@ export default function PackSettingsModal({
     getMinecraftVersions, 
     getLoaders 
   } = usePack();
+  const navigate = useNavigate();
+
+  const isClosingRef = useRef<boolean>(false);
+
+  const handleCloseModal = () => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
+    if (onCancel) {
+      onCancel();
+    } else {
+      onClose();
+      if (packagesList.length === 0) {
+        navigate("/");
+      }
+    }
+  };
 
   const nameInputRef = useRef<HTMLInputElement>(null);
   const versionTriggerRef = useRef<HTMLButtonElement>(null);
@@ -58,7 +76,7 @@ export default function PackSettingsModal({
   const [name, setName] = useState<string>("MODPKG");
   const [id, setId] = useState<string>("");
   const [isIdCustomized, setIsIdCustomized] = useState<boolean>(false);
-  const [mcVersion, setMcVersion] = useState<string>("1.20.4");
+  const [mcVersion, setMcVersion] = useState<string>("26.3");
   const [loader, setLoader] = useState<string>("fabric");
   const [currentVersion, setCurrentVersion] = useState<string>("v1.0.0");
 
@@ -79,13 +97,14 @@ export default function PackSettingsModal({
   // Sync modal form with livePack or reset defaults for Create Mode
   useEffect(() => {
     if (isOpen) {
+      isClosingRef.current = false;
       if (isCreateMode) {
         const availableMc = getMinecraftVersions(false);
         const randomSuffix = Math.random().toString(36).substring(2, 7);
         setName("MODPKG");
         setId(`modpkg-${randomSuffix}`);
         setIsIdCustomized(false);
-        setMcVersion(availableMc[0] || "1.20.4");
+        setMcVersion(availableMc[0] || "26.3");
         setLoader("fabric");
         setCurrentVersion("v1.0.0");
         setIsCreatingVersion(false);
@@ -210,15 +229,11 @@ export default function PackSettingsModal({
       <Dialog 
         open={isOpen} 
         onOpenChange={(open) => {
-          if (!open && isFirstPack) return;
-          if (!open) onClose();
+          if (!open) handleCloseModal();
         }}
       >
         <DialogContent 
           hideClose
-          onPointerDownOutside={(e) => isFirstPack && e.preventDefault()}
-          onEscapeKeyDown={(e) => isFirstPack && e.preventDefault()}
-          onInteractOutside={(e) => isFirstPack && e.preventDefault()}
           className="sm:max-w-xl bg-card border border-border p-0 gap-0 overflow-hidden shadow-2xl rounded-2xl"
         >
           <DialogHeader className="p-5 px-6 border-b border-border flex flex-row items-center justify-between space-y-0">
@@ -237,18 +252,14 @@ export default function PackSettingsModal({
                 </p>
               </div>
             </div>
-            {!isFirstPack && (
-              <DialogClose asChild>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  title={t("common.close")}
-                  className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground hover:bg-muted transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </DialogClose>
-            )}
+            <button
+              type="button"
+              onClick={handleCloseModal}
+              title={t("common.close")}
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-foreground hover:bg-muted transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </DialogHeader>
 
           <div className="p-6 flex flex-col gap-5">

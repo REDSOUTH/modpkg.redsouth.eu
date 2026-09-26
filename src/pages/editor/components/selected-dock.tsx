@@ -1,4 +1,5 @@
-import { Package, Download, Trash2, Pin, PinOff, Box, Paintbrush, Glasses, FileBraces, FileText, Layers, Braces, Map, PlusCircle } from "lucide-react";
+import { Package, Download, Trash2, Pin, PinOff, Box, Paintbrush, Glasses, FileBraces, FileText, Layers, Braces, Map, PlusCircle, ShieldCheck, Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { ContentTypeFilterBadges, FilterBadgeItem } from "@/components/common/content-type-filter-badges";
 import { ContentTypeIcon } from "@/components/common/content-type-icon";
@@ -14,9 +15,21 @@ import { ExportModpkgDialog } from "@/components/views/export-modpkg-dialog";
 export type ContentType = "mod" | "resourcepack" | "shader" | "datapack" | "world" | "override" | string;
 export type ProviderType = "modrinth" | "curseforge" | "custom" | "local_override" | "all";
 
-export default function SelectedDock() {
+export interface SelectedDockProps {
+  onItemClick?: (item: any) => void;
+}
+
+export default function SelectedDock({ onItemClick }: SelectedDockProps = {}) {
   const { t } = useTranslation();
-  const { packSettings, installedContent, customFiles, removeContent } = usePack();
+  const { 
+    packSettings, 
+    installedContent, 
+    customFiles, 
+    removeContent, 
+    verifiedItems, 
+    isVerifying, 
+    verifyPackContents 
+  } = usePack();
   const [isHovered, setIsHovered] = useState<boolean>(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState<boolean>(false);
 
@@ -51,6 +64,31 @@ export default function SelectedDock() {
 
   const removeItem = (id: string) => {
     removeContent(id);
+  };
+
+  const handleVerify = async () => {
+    if (isVerifying || installedContent.length === 0) return;
+    toast.loading(t("editor.dock.verifyingProgress"), { id: "verify-pack" });
+    const result = await verifyPackContents();
+    if (result.failedNames.length === 0) {
+      toast.success(
+        t("editor.dock.verifySuccessAll", { 
+          count: result.verifiedCount, 
+          mc: packSettings.mcVersion, 
+          loader: packSettings.loader 
+        }), 
+        { id: "verify-pack" }
+      );
+    } else {
+      toast.warning(
+        t("editor.dock.verifyWarningPartial", {
+          verified: result.verifiedCount,
+          total: result.totalCount,
+          failed: result.failedNames.length,
+        }),
+        { id: "verify-pack" }
+      );
+    }
   };
 
   const isExpanded = isHovered || isPinned || isExportDialogOpen;
@@ -199,6 +237,30 @@ export default function SelectedDock() {
                 )}
               </div>
             </div>
+
+            {/* Verify Compatibility Button */}
+            <button
+              onClick={handleVerify}
+              disabled={isVerifying || installedContent.length === 0}
+              className="w-full h-8 px-3 rounded-lg border border-border bg-muted/60 hover:bg-muted text-xs font-medium flex items-center justify-center gap-2 text-foreground transition-all hover:border-emerald-500/50 hover:text-emerald-500 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+            >
+              {isVerifying ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />
+                  <span>{t("editor.dock.verifyingProgress")}</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>{t("editor.dock.verifyCompatibility")}</span>
+                  {verifiedItems.length > 0 && (
+                    <span className="ml-auto text-[10px] bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded-full font-bold">
+                      {verifiedItems.length}/{installedContent.length}
+                    </span>
+                  )}
+                </>
+              )}
+            </button>
           </div>
         )}
 
@@ -212,15 +274,12 @@ export default function SelectedDock() {
               return (
                 <motion.div
                   key={item.id}
-                  layout="position"
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ 
-                    duration: 0.25,
-                    delay: 0.12,
-                    ease: [0.16, 1, 0.3, 1],
-                    opacity: { duration: 0.2, delay: 0.08 }
+                    duration: 0.15,
+                    ease: "easeOut"
                   }}
                   className={`flex items-center rounded-xl transition-colors group relative max-w-full ${
                     isExpanded 
@@ -229,31 +288,41 @@ export default function SelectedDock() {
                   }`}
                 >
                   {/* Item Image / Avatar */}
-                  {isOverride ? (
-                    <div className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center text-amber-400 shrink-0 border border-border select-none pointer-events-none">
-                      <FileBraces className="w-5 h-5 text-amber-400 shrink-0" />
-                    </div>
-                  ) : item.iconUrl && item.iconUrl !== "/logo.svg" ? (
-                    <img 
-                      src={item.iconUrl} 
-                      alt={item.name} 
-                      className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-black shrink-0 object-cover border border-border select-none pointer-events-none" 
-                      draggable={false}
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = "none";
-                        const parent = (e.target as HTMLElement).parentElement;
-                        if (parent) {
-                          const fallback = document.createElement("div");
-                          fallback.className = "w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center shrink-0 border border-border select-none pointer-events-none";
-                          parent.appendChild(fallback);
-                        }
-                      }}
-                    />
-                  ) : (
-                    <div className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center shrink-0 border border-border select-none pointer-events-none">
-                      <ContentTypeIcon type={item.contentType} iconClassName="w-5 h-5 text-muted-foreground" />
-                    </div>
-                  )}
+                  <div 
+                    onClick={(e) => {
+                      if (!isOverride && onItemClick) {
+                        e.stopPropagation();
+                        onItemClick(item);
+                      }
+                    }}
+                    className={`shrink-0 flex items-center justify-center ${!isOverride ? "cursor-pointer" : ""}`}
+                  >
+                    {isOverride ? (
+                      <div className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center text-amber-400 shrink-0 border border-border select-none pointer-events-none">
+                        <FileBraces className="w-5 h-5 text-amber-400 shrink-0" />
+                      </div>
+                    ) : item.iconUrl && item.iconUrl !== "/logo.svg" ? (
+                      <img 
+                        src={item.iconUrl} 
+                        alt={item.name} 
+                        className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-black shrink-0 object-cover border border-border select-none pointer-events-none" 
+                        draggable={false}
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = "none";
+                          const parent = (e.target as HTMLElement).parentElement;
+                          if (parent) {
+                            const fallback = document.createElement("div");
+                            fallback.className = "w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center shrink-0 border border-border select-none pointer-events-none";
+                            parent.appendChild(fallback);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-muted flex items-center justify-center shrink-0 border border-border select-none pointer-events-none">
+                        <ContentTypeIcon type={item.contentType} iconClassName="w-5 h-5 text-muted-foreground" />
+                      </div>
+                    )}
+                  </div>
 
                   {isExpanded && (
                     <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
@@ -261,7 +330,15 @@ export default function SelectedDock() {
                       <div className="w-fit max-w-full">
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="font-medium text-sm text-foreground inline-block max-w-full truncate cursor-pointer hover:text-[#FE5000] transition-colors text-left align-bottom">
+                            <span 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isOverride && onItemClick) {
+                                  onItemClick(item);
+                                }
+                              }}
+                              className="font-medium text-sm text-foreground inline-block max-w-full truncate cursor-pointer hover:text-[#FE5000] transition-colors text-left align-bottom"
+                            >
                               {item.name}
                             </span>
                           </TooltipTrigger>
@@ -287,6 +364,23 @@ export default function SelectedDock() {
 
                         {/* Type Icon with specific color */}
                         <ContentTypeIcon type={item.contentType} />
+
+                        {/* Verified Check Icon with the exact same separator and style */}
+                        {verifiedItems.includes(item.id) && (
+                          <>
+                            <span className="text-muted-foreground/30 select-none shrink-0 leading-none flex items-center">•</span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="flex items-center text-emerald-500 shrink-0 cursor-default">
+                                  <Check className="w-3 h-3 stroke-[2.5]" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs font-medium">
+                                <p>{t("editor.dock.verifiedBadge", { mcVersion: packSettings.mcVersion, loader: packSettings.loader })}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -294,9 +388,12 @@ export default function SelectedDock() {
                   {/* Unified Corporate Trash Action Button (Compact h-8 w-8) */}
                   {isExpanded && (
                     <button 
-                      onClick={() => removeItem(item.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeItem(item.id);
+                      }}
                       title={t("editor.dock.removeItem")}
-                      className="flex opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-xl border border-border bg-muted text-muted-foreground hover:border-[#FE5000] hover:text-[#FE5000] hover:bg-transparent items-center justify-center shrink-0 ml-1"
+                      className="flex opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-xl border border-border bg-muted text-muted-foreground hover:border-[#FE5000] hover:text-[#FE5000] hover:bg-transparent items-center justify-center shrink-0 ml-1 cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

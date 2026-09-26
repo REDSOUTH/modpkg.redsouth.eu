@@ -278,11 +278,9 @@ async function getModrinthVersions(
     
     // Fallback: If 0 versions found for resourcepacks or datapacks or shaders with strict version,
     // fetch without game_versions so the user can still select versions of the resource!
-    if (data.length === 0 && mcVersion) {
+    const allowVersionFallback = isShader || isResourcePack || isDatapack || isWorld;
+    if (data.length === 0 && mcVersion && allowVersionFallback) {
       const fallbackUrl = new URL(`https://api.modrinth.com/v2/project/${modId}/version`);
-      if (!isShader && !isResourcePack && !isDatapack && !isWorld && loader && loader !== "Any") {
-        fallbackUrl.searchParams.set("loaders", JSON.stringify([loader.toLowerCase()]));
-      }
       const fallbackRes = await fetch(fallbackUrl.toString());
       if (fallbackRes.ok) {
         data = await fallbackRes.json();
@@ -347,9 +345,9 @@ async function getCurseForgeVersions(
       files = json.data || [];
     }
 
-    // Fallback: If 0 files found (e.g. for shaders, resource packs, or mods missing exact patch tag),
-    // query files without gameVersion or modLoaderType so files are returned
-    if (files.length === 0) {
+    // Fallback: If 0 files found (only for shaders, resource packs, datapacks, or worlds that might be version agnostic)
+    const allowVersionFallback = isShader || isResourcePack || isDatapack || isWorld;
+    if (files.length === 0 && allowVersionFallback) {
       const fallbackUrl = new URL(getCurseforgeProxyUrl(`/v1/mods/${modId}/files`), window.location.origin);
       const fallbackRes = await fetch(fallbackUrl.toString());
       if (fallbackRes.ok) {
